@@ -1,0 +1,18 @@
+path: C:/Users/admin/PFE/PFE-Obstacle-Detection/dataset
+train: images/train2017
+val: images/val2017
+
+nc: 12
+names:
+  0: person
+  1: car
+  2: motorcycle_bike
+  3: bus_truck
+  4: traffic_light
+  5: stop_sign
+  6: bench
+  7: dog
+  8: chair
+  9: potted_plant
+  10: fire_hydrant
+  11: parking_meter

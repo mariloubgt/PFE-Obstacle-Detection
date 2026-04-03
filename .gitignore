@@ -1,1 +1,41 @@
+# Environnement virtuel
+pfe/
+env/
+venv/
 
+# Datasets (trop lourds pour GitHub)
+dataset/
+coco/
+*.zip
+*.tar.gz
+
+# Résultats d'entraînement YOLO
+runs/
+
+# Modèles entraînés (lourds)
+*.pt
+*.onnx
+*.engine
+
+# Cache
+*.cache
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Env variables
+.env
+*.env
+
+# OS
+Thumbs.db
+desktop.ini
+
+# VS Code
+.vscode/
