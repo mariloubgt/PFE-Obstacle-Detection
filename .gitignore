@@ -5,6 +5,10 @@ venv/
 
 # Datasets (trop lourds pour GitHub)
 dataset/
+dataset pascal/
+dataset_indoor_balanced/
+dataset_indoor_yolo/
+dataset_original_backup/
 coco/
 *.zip
 *.tar.gz
