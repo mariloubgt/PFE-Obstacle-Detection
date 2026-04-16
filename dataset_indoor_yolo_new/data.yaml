@@ -1,0 +1,7 @@
+path: .
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 7
+names: ['chair', 'clock', 'exit', 'fireextinguisher', 'printer', 'screen', 'trashbin']

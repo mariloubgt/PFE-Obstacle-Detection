@@ -1,4 +1,4 @@
-path: C:\Users\admin\PFE\PFE-Obstacle-Detection\dataset_indoor_balanced
+path: ./dataset_indoor_yolo_new
 train: train/images
 val: valid/images
 test: test/images
