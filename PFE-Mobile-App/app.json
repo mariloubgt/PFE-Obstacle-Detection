@@ -40,7 +40,13 @@
           "microphonePermission": "This app uses the microphone for voice commands."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "Motion is used to detect a shake so we can repeat the close-obstacle warning."
+        }
+      ]
     ]
   }
 }
