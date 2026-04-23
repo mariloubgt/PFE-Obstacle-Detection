@@ -29,7 +29,7 @@ if torch.cuda.is_available():
 
 # --- paste into cell 2 ---
 """
-!pip install -q ultralytics
+!pip install -q ultralytics sahi opencv-python
 
 import yaml
 from pathlib import Path
@@ -110,6 +110,13 @@ AMP          = True
 RESULTS_CSV  = "benchmark_yolov8.csv"
 PERCLASS_CSV = "benchmark_yolov8_perclass.csv"
 
+# ── NEW: Enhanced Inference Settings ──
+USE_SAHI          = False  # Set to True for sliced inference (slow but high recall)
+USE_PREPROCESSING = False  # Set to True for CLAHE enhancement
+SAHI_SLICE_SIZE   = 320    # Patch size for slicing
+SAHI_OVERLAP      = 0.2    # Overlap between slices
+# ──────────────────────────────────────
+
 CLASS_NAMES = [
     'bench', 'bicycle', 'bus', 'bus_stop', 'car', 'crutch', 'curb', 'dog',
     'fire_hydrant', 'motorcycle', 'person', 'pole', 'spherical_roadblock',
@@ -123,14 +130,23 @@ MODELS = [
     "yolov8s.pt",
     "yolov8m.pt",
 ]
-"""
+import cv2
+try:
+    from sahi.predict import get_sliced_prediction
+    from sahi import AutoDetectionModel
+except ImportError:
+    pass
 
-# ══════════════════════════════════════════════════════════════
-# CELL 4: Benchmark Function (Enhanced)
-# ══════════════════════════════════════════════════════════════
+def preprocess_image(img_path):
+    # Apply CLAHE to enhance visibility/contrast
+    img = cv2.imread(str(img_path))
+    if img is None: return None
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    cl = clahe.apply(l)
+    return cv2.cvtColor(cv2.merge((cl,a,b)), cv2.COLOR_LAB2BGR)
 
-# --- paste into cell 4 ---
-"""
 def benchmark_model(model_name):
     print(f"\n{'='*60}")
     print(f"  BENCHMARK: {model_name}")
@@ -220,15 +236,69 @@ def benchmark_model(model_name):
     if not test_images:
         raise FileNotFoundError(f"No test images under {test_img_dir}")
 
-    # Warmup
-    for _ in range(5):
-        best_model(str(test_images[0]), imgsz=IMG_SIZE, device=DEVICE, verbose=False)
+    # --- Enhanced Validation Loop ---
+    # We use a custom loop to handle SAHI, Preprocessing, and Negative Samples correctly
+    
+    # 1. Prepare SAHI model if needed
+    sahi_model = None
+    if USE_SAHI:
+        sahi_model = AutoDetectionModel.from_pretrained(
+            model_type='ultralytics',
+            model_path=str(best_pt),
+            device=f"cuda:{DEVICE}" if torch.cuda.is_available() else "cpu",
+            confidence_threshold=0.25
+        )
 
+    # 2. Iterate through test images
+    tn_count = 0  # True Negatives (Correctly empty)
+    fp_count = 0  # False Positives on negative images
+    neg_total = 0
+    
     latencies = []
+    
+    # Track per-image results for metrics later
+    # Note: Standard metrics (mAP) are still from best_model.val() above
+    # We add custom metrics for negative samples and speed comparison
+    
     for img_path in test_images:
+        # Preprocessing
+        if USE_PREPROCESSING:
+            input_data = preprocess_image(img_path)
+            if input_data is None: continue
+        else:
+            input_data = str(img_path)
+
         t0 = time.perf_counter()
-        best_model(str(img_path), imgsz=IMG_SIZE, device=DEVICE, verbose=False)
-        latencies.append((time.perf_counter() - t0) * 1000)
+        
+        if USE_SAHI and sahi_model:
+            results_sahi = get_sliced_prediction(
+                input_data,
+                sahi_model,
+                slice_height=SAHI_SLICE_SIZE,
+                slice_width=SAHI_SLICE_SIZE,
+                overlap_height_ratio=SAHI_OVERLAP,
+                overlap_width_ratio=SAHI_OVERLAP,
+                verbose=0
+            )
+            latencies.append((time.perf_counter() - t0) * 1000)
+            boxes_count = len(results_sahi.object_prediction_list)
+        else:
+            res = best_model(input_data, imgsz=IMG_SIZE, device=DEVICE, verbose=False)
+            latencies.append((time.perf_counter() - t0) * 1000)
+            boxes_count = len(res[0].boxes) if res and res[0].boxes else 0
+
+        # Negative Sample Logic
+        lbl_path = Path(str(img_path).replace("images", "labels")).with_suffix(".txt")
+        is_negative = not lbl_path.exists() or lbl_path.stat().st_size == 0
+        
+        if is_negative:
+            neg_total += 1
+            if boxes_count == 0:
+                tn_count += 1
+            else:
+                fp_count += 1
+
+    neg_acc = (tn_count / neg_total) if neg_total > 0 else 1.0
 
     # ── 4. Collect metrics ──────────────────────────────────
     size_mb  = best_pt.stat().st_size / 1e6
@@ -246,6 +316,9 @@ def benchmark_model(model_name):
         "recall":       round(r,  4),
         "F1":           round(f1, 4),
         "speed_ms/img": round(float(np.mean(latencies)), 2),
+        "neg_acc":      round(neg_acc, 4),
+        "sahi":         USE_SAHI,
+        "preprocess":   USE_PREPROCESSING,
         "size_MB":      round(size_mb,  1),
         "params_M":     round(params_m, 1),
     }
@@ -284,7 +357,9 @@ for model_name in MODELS:
         print(f"  │ Precision    : {row['precision']:<15} │")
         print(f"  │ Recall       : {row['recall']:<15} │")
         print(f"  │ F1           : {row['F1']:<15} │")
+        print(f"  │ Neg Accuracy : {row['neg_acc']:<15} │")
         print(f"  │ Speed        : {row['speed_ms/img']} ms/img{' '*(8-len(str(row['speed_ms/img'])))}│")
+        print(f"  │ SAHI / Pre   : {str(row['sahi'])[0]}/{str(row['preprocess'])[0]}{' '*(13)}│")
         print(f"  │ Size         : {row['size_MB']} MB{' '*(11-len(str(row['size_MB'])))}│")
         print(f"  │ Params       : {row['params_M']} M{' '*(12-len(str(row['params_M'])))}│")
         print(f"  └─────────────────────────────────┘")
@@ -297,7 +372,7 @@ for model_name in MODELS:
 # Save CSVs
 _cols = [
     "model", "mAP@0.5", "mAP@0.5:0.95", "precision", "recall", "F1",
-    "speed_ms/img", "size_MB", "params_M",
+    "speed_ms/img", "neg_acc", "sahi", "preprocess", "size_MB", "params_M",
 ]
 df = pd.DataFrame(rows, columns=_cols) if rows else pd.DataFrame(columns=_cols)
 df.to_csv(RESULTS_CSV, index=False)
@@ -341,11 +416,12 @@ else:
                 "precision":    "{:.4f}",
                 "recall":       "{:.4f}",
                 "F1":           "{:.4f}",
+                "neg_acc":      "{:.4f}",
                 "speed_ms/img": "{:.1f} ms",
                 "size_MB":      "{:.1f} MB",
                 "params_M":     "{:.1f} M",
             })
-            .highlight_max(subset=["mAP@0.5", "mAP@0.5:0.95", "precision", "recall", "F1"], color="#2d6a2e")
+            .highlight_max(subset=["mAP@0.5", "mAP@0.5:0.95", "precision", "recall", "F1", "neg_acc"], color="#2d6a2e")
             .highlight_min(subset=["speed_ms/img", "size_MB", "params_M"], color="#1a5276")
             .set_properties(**{"text-align": "center", "font-size": "13px"})
             .set_table_styles([
