@@ -18,9 +18,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DetectionOverlay from '../components/DetectionOverlay';
 import { predictImage } from '../services/predict';
-import { COLORS } from '../constants/theme';
+import { COLORS, LAYOUT } from '../constants/theme';
+import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
+import { useVolumeSceneQueryTrigger } from '../hooks/useVolumeSceneQueryTrigger';
 
 export default function MainNavigationScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -40,6 +42,15 @@ export default function MainNavigationScreen({ navigation }) {
   const [detections, setDetections] = useState([]);
   const [inferenceMs, setInferenceMs] = useState(null);
   const [inferenceError, setInferenceError] = useState(null);
+
+  useVolumeSceneQueryTrigger(navigation, { enabled: !volumeOpen });
+
+  const openSceneQuery = useCallback(() => {
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    }
+    navigation.navigate('SceneQuery');
+  }, [navigation]);
 
   useEffect(() => {
     const tick = () => {
@@ -219,6 +230,19 @@ export default function MainNavigationScreen({ navigation }) {
             </Pressable>
 
             <Pressable
+              style={styles.flipBtn}
+              onPress={toggleFacing}
+              accessibilityRole="button"
+              accessibilityLabel="Switch camera front or back"
+            >
+              <MaterialCommunityIcons
+                name="camera-flip-outline"
+                size={22}
+                color={COLORS.white}
+              />
+            </Pressable>
+
+            <Pressable
               style={styles.torchBtn}
               onPress={() => {
                 setTorch((t) => !t);
@@ -261,7 +285,11 @@ export default function MainNavigationScreen({ navigation }) {
       />
 
       <View style={styles.alertCard}>
-        <MaterialCommunityIcons name="alert-circle-outline" size={22} color={COLORS.teal} />
+        <MaterialCommunityIcons
+          name="alert-circle-outline"
+          size={22}
+          color={aiTestEnabled ? COLORS.teal : COLORS.danger}
+        />
         <View style={styles.alertTextCol}>
           {aiTestEnabled ? (
             <>
@@ -316,11 +344,11 @@ export default function MainNavigationScreen({ navigation }) {
 
         <Pressable
           style={styles.centerFab}
-          onPress={toggleFacing}
+          onPress={openSceneQuery}
           accessibilityRole="button"
-          accessibilityLabel="Switch camera front or back"
+          accessibilityLabel="Open scene query — ask about your surroundings"
         >
-          <MaterialCommunityIcons name="camera-flip-outline" size={30} color={COLORS.btnText} />
+          <MaterialCommunityIcons name="chart-box-outline" size={30} color={COLORS.btnText} />
         </Pressable>
 
         <Pressable
@@ -379,7 +407,7 @@ const styles = StyleSheet.create({
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: LAYOUT.screenPaddingH,
     paddingVertical: 8,
     gap: 8,
   },
@@ -391,7 +419,7 @@ const styles = StyleSheet.create({
     flex: 1,
     color: COLORS.white,
     fontSize: 15,
-    fontWeight: '600',
+    fontFamily: FONTS.en.semibold,
   },
   topRight: {
     flexDirection: 'row',
@@ -416,7 +444,7 @@ const styles = StyleSheet.create({
   aiPillText: {
     color: COLORS.teal,
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
     letterSpacing: 0.3,
   },
   aiPillTextOn: {
@@ -440,14 +468,14 @@ const styles = StyleSheet.create({
   liveText: {
     color: '#22C55E',
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
     letterSpacing: 0.5,
   },
   visionArea: {
     flex: 1,
-    marginHorizontal: 12,
+    marginHorizontal: LAYOUT.screenPaddingH,
     marginVertical: 8,
-    borderRadius: 12,
+    borderRadius: LAYOUT.cardRadius,
     backgroundColor: '#070A0F',
     overflow: 'hidden',
   },
@@ -457,6 +485,18 @@ const styles = StyleSheet.create({
   tapFlash: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  flipBtn: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 20,
   },
   torchBtn: {
     position: 'absolute',
@@ -481,6 +521,7 @@ const styles = StyleSheet.create({
     color: COLORS.grey,
     fontSize: 15,
     textAlign: 'center',
+    fontFamily: FONTS.en.regular,
   },
   allowBtn: {
     marginTop: 8,
@@ -491,20 +532,20 @@ const styles = StyleSheet.create({
   },
   allowBtnText: {
     color: COLORS.btnText,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
     fontSize: 16,
   },
   riskStrip: {
     height: 6,
-    marginHorizontal: 12,
+    marginHorizontal: LAYOUT.screenPaddingH,
     borderRadius: 3,
     marginBottom: 10,
   },
   alertCard: {
     flexDirection: 'row',
-    marginHorizontal: 12,
+    marginHorizontal: LAYOUT.screenPaddingH,
     padding: 14,
-    borderRadius: 14,
+    borderRadius: LAYOUT.cardRadius,
     borderWidth: 1,
     borderColor: COLORS.teal,
     backgroundColor: COLORS.bgElevated,
@@ -517,18 +558,20 @@ const styles = StyleSheet.create({
   alertTitle: {
     color: COLORS.white,
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONTS.en.bold,
     marginBottom: 6,
   },
   inferenceMeta: {
     color: COLORS.grey,
     fontSize: 13,
     marginBottom: 4,
+    fontFamily: FONTS.en.regular,
   },
   inferenceErr: {
     color: '#FCA5A5',
     fontSize: 12,
     marginTop: 4,
+    fontFamily: FONTS.en.regular,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -543,20 +586,21 @@ const styles = StyleSheet.create({
   dangerBadgeText: {
     color: '#FCA5A5',
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
   },
   alertAr: {
     color: COLORS.tealBright,
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 22,
     writingDirection: 'rtl',
+    fontFamily: FONTS.ar.regular,
   },
   bottomNav: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-around',
     paddingTop: 12,
-    paddingHorizontal: 24,
+    paddingHorizontal: LAYOUT.screenPaddingH,
     backgroundColor: COLORS.bg,
     borderTopWidth: 1,
     borderTopColor: COLORS.borderMuted,
@@ -569,7 +613,7 @@ const styles = StyleSheet.create({
   navLabel: {
     color: COLORS.tealBright,
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONTS.en.semibold,
   },
   centerFab: {
     width: 64,
@@ -600,13 +644,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     color: COLORS.white,
     fontSize: 20,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
     marginBottom: 6,
   },
   modalHint: {
     color: COLORS.grey,
     fontSize: 14,
     marginBottom: 16,
+    fontFamily: FONTS.en.regular,
   },
   modalSlider: {
     width: '100%',
@@ -621,6 +666,7 @@ const styles = StyleSheet.create({
   endLabel: {
     color: COLORS.grey,
     fontSize: 12,
+    fontFamily: FONTS.en.regular,
   },
   modalDone: {
     alignSelf: 'flex-end',
@@ -630,6 +676,6 @@ const styles = StyleSheet.create({
   modalDoneText: {
     color: COLORS.teal,
     fontSize: 17,
-    fontWeight: '700',
+    fontFamily: FONTS.en.semibold,
   },
 });

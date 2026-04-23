@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -6,7 +6,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
-import { COLORS } from '../constants/theme';
+import { COLORS, LAYOUT } from '../constants/theme';
+import { FONTS } from '../constants/typography';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
 
 export default function LanguageVoiceScreen({ navigation }) {
@@ -33,6 +34,13 @@ export default function LanguageVoiceScreen({ navigation }) {
     const saved = await saveAlertVolume(v);
     setVolume(saved);
   }, []);
+
+  const speechLabel = useMemo(() => {
+    if (speechRate < 0.25) return 'Slow';
+    if (speechRate < 0.45) return 'Slow+';
+    if (speechRate < 0.7) return 'Medium';
+    return 'Fast';
+  }, [speechRate]);
 
   return (
     <View
@@ -87,7 +95,7 @@ export default function LanguageVoiceScreen({ navigation }) {
       <View style={styles.sliderBlock}>
         <View style={styles.sliderHeader}>
           <Text style={styles.sliderLabel}>Speech Rate</Text>
-          <Text style={styles.sliderHint}>Slow+</Text>
+          <Text style={styles.sliderHint}>{speechLabel}</Text>
         </View>
         <Slider
           style={styles.slider}
@@ -133,9 +141,9 @@ export default function LanguageVoiceScreen({ navigation }) {
         style={({ pressed }) => [styles.primaryBtn, pressed && styles.pressed]}
         onPress={() => navigation.navigate('Main')}
         accessibilityRole="button"
-        accessibilityLabel="Start VisionAid"
+        accessibilityLabel="Start navigation"
       >
-        <Text style={styles.primaryBtnText}>Start VisionAid</Text>
+        <Text style={styles.primaryBtnText}>Start</Text>
         <MaterialCommunityIcons name="arrow-right" size={22} color={COLORS.btnText} />
       </Pressable>
     </View>
@@ -146,13 +154,13 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: COLORS.bg,
-    paddingHorizontal: 20,
+    paddingHorizontal: LAYOUT.screenPaddingH,
     paddingTop: 8,
   },
   title: {
     color: COLORS.white,
     fontSize: 26,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
     marginBottom: 8,
   },
   subtitle: {
@@ -160,6 +168,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     marginBottom: 22,
+    fontFamily: FONTS.en.regular,
   },
   langRow: {
     flexDirection: 'row',
@@ -170,7 +179,7 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderColor: COLORS.borderMuted,
-    borderRadius: 14,
+    borderRadius: LAYOUT.cardRadius,
     paddingVertical: 16,
     paddingHorizontal: 12,
     alignItems: 'center',
@@ -191,21 +200,24 @@ const styles = StyleSheet.create({
   langCode: {
     color: COLORS.white,
     fontSize: 20,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
   },
   langAr: {
     color: COLORS.tealBright,
     fontSize: 16,
     writingDirection: 'rtl',
+    fontFamily: FONTS.ar.semibold,
   },
   langFr: {
     color: COLORS.tealBright,
     fontSize: 16,
+    fontFamily: FONTS.en.semibold,
   },
   langEn: {
     color: COLORS.grey,
     fontSize: 12,
     textAlign: 'center',
+    fontFamily: FONTS.en.regular,
   },
   sliderBlock: {
     marginBottom: 22,
@@ -219,12 +231,12 @@ const styles = StyleSheet.create({
   sliderLabel: {
     color: COLORS.white,
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONTS.en.bold,
   },
   sliderHint: {
     color: COLORS.tealBright,
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: FONTS.en.semibold,
   },
   slider: {
     width: '100%',
@@ -238,6 +250,7 @@ const styles = StyleSheet.create({
   endLabel: {
     color: COLORS.grey,
     fontSize: 12,
+    fontFamily: FONTS.en.regular,
   },
   primaryBtn: {
     flexDirection: 'row',
@@ -245,13 +258,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: COLORS.teal,
-    borderRadius: 14,
+    borderRadius: LAYOUT.buttonRadius,
     paddingVertical: 16,
+    minHeight: 56,
   },
   pressed: { opacity: 0.92 },
   primaryBtnText: {
     color: COLORS.btnText,
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
   },
 });
