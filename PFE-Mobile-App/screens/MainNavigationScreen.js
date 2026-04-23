@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
+import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -16,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import DangerAlertModal from '../components/DangerAlertModal';
 import DetectionOverlay from '../components/DetectionOverlay';
 import { predictImage } from '../services/predict';
 import { COLORS, LAYOUT } from '../constants/theme';
@@ -23,6 +25,7 @@ import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
 import { useVolumeSceneQueryTrigger } from '../hooks/useVolumeSceneQueryTrigger';
+import { pickCloseThreat } from '../utils/evaluateCloseThreat';
 
 export default function MainNavigationScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -43,7 +46,13 @@ export default function MainNavigationScreen({ navigation }) {
   const [inferenceMs, setInferenceMs] = useState(null);
   const [inferenceError, setInferenceError] = useState(null);
 
-  useVolumeSceneQueryTrigger(navigation, { enabled: !volumeOpen });
+  /** Full-screen danger when model reports a very close obstacle (AI test / live). */
+  const [dangerPayload, setDangerPayload] = useState(null);
+  const safeStreakRef = useRef(0);
+  const manualSuppressRef = useRef(false);
+  const dangerSoundPlayedRef = useRef(false);
+
+  useVolumeSceneQueryTrigger(navigation, { enabled: !volumeOpen && !dangerPayload });
 
   const openSceneQuery = useCallback(() => {
     if (Platform.OS !== 'web') {
@@ -167,6 +176,54 @@ export default function MainNavigationScreen({ navigation }) {
       clearInterval(id);
     };
   }, [showCamera, aiTestEnabled]);
+
+  useEffect(() => {
+    if (!aiTestEnabled || !showCamera) {
+      safeStreakRef.current = 0;
+      manualSuppressRef.current = false;
+      dangerSoundPlayedRef.current = false;
+      setDangerPayload(null);
+      return;
+    }
+    const threat = pickCloseThreat(detections);
+    if (threat) {
+      safeStreakRef.current = 0;
+      if (manualSuppressRef.current) {
+        return;
+      }
+      setDangerPayload(threat);
+    } else {
+      safeStreakRef.current += 1;
+      if (safeStreakRef.current >= 2) {
+        setDangerPayload(null);
+        manualSuppressRef.current = false;
+        dangerSoundPlayedRef.current = false;
+      }
+    }
+  }, [detections, aiTestEnabled, showCamera]);
+
+  useEffect(() => {
+    if (!dangerPayload) {
+      return;
+    }
+    if (dangerSoundPlayedRef.current) {
+      return;
+    }
+    dangerSoundPlayedRef.current = true;
+    if (Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+    }
+    Speech.stop();
+    Speech.speak(dangerPayload.arMessage, { language: 'ar-SA', rate: 0.95 });
+  }, [dangerPayload]);
+
+  const onDangerBack = useCallback(() => {
+    Speech.stop();
+    setDangerPayload(null);
+    manualSuppressRef.current = true;
+    safeStreakRef.current = 0;
+    dangerSoundPlayedRef.current = false;
+  }, []);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -361,6 +418,14 @@ export default function MainNavigationScreen({ navigation }) {
           <Text style={styles.navLabel}>Settings</Text>
         </Pressable>
       </View>
+
+      <DangerAlertModal
+        visible={!!dangerPayload}
+        displayLabel={dangerPayload?.displayLabel}
+        distanceM={dangerPayload?.distanceM}
+        arMessage={dangerPayload?.arMessage}
+        onBack={onDangerBack}
+      />
 
       <Modal
         visible={volumeOpen}
