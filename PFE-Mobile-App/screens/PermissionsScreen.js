@@ -11,7 +11,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
-import { COLORS } from '../constants/theme';
+import { COLORS, LAYOUT } from '../constants/theme';
+import { FONTS } from '../constants/typography';
 
 function PermissionRow({ icon, title, description, value, onValueChange }) {
   return (
@@ -65,30 +66,30 @@ export default function PermissionsScreen({ navigation }) {
 
         <View style={styles.list}>
           <PermissionRow
-            icon="monitor"
+            icon="laptop"
             title="Live Camera Feed"
-            description="See obstacles in front of you in real time."
+            description="Detects obstacles and distances in real time."
             value={camera}
             onValueChange={setCamera}
           />
           <PermissionRow
             icon="microphone"
             title="Voice Commands in Daridja"
-            description="Speak to control the app hands-free."
+            description="Speak questions · dictation when available offline."
             value={voiceCmd}
             onValueChange={setVoiceCmd}
           />
           <PermissionRow
             icon="surround-sound"
             title="Audio Alerts in Daridja"
-            description="Hear warnings about people and objects nearby."
+            description="Spoken warnings · vibration for danger zones."
             value={audioAlerts}
             onValueChange={setAudioAlerts}
           />
           <PermissionRow
             icon="information-outline"
             title="Internet (Gemini AI only)"
-            description="Used only when you ask the assistant a question."
+            description="Off by default · only for scene questions."
             value={internet}
             onValueChange={setInternet}
           />
@@ -112,7 +113,7 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: COLORS.bg,
-    paddingHorizontal: 20,
+    paddingHorizontal: LAYOUT.screenPaddingH,
   },
   scrollView: {
     flex: 1,
@@ -125,7 +126,7 @@ const styles = StyleSheet.create({
   title: {
     color: COLORS.white,
     fontSize: 26,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
     marginBottom: 8,
   },
   subtitle: {
@@ -133,6 +134,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     marginBottom: 24,
+    fontFamily: FONTS.en.regular,
   },
   list: {
     gap: 14,
@@ -141,8 +143,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: COLORS.teal,
-    borderRadius: 14,
+    borderColor: COLORS.borderMuted,
+    borderRadius: LAYOUT.cardRadius,
     paddingVertical: 12,
     paddingHorizontal: 12,
     backgroundColor: COLORS.bgElevated,
@@ -162,13 +164,14 @@ const styles = StyleSheet.create({
   rowTitle: {
     color: COLORS.white,
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONTS.en.bold,
     marginBottom: 4,
   },
   rowDesc: {
     color: COLORS.grey,
     fontSize: 13,
     lineHeight: 18,
+    fontFamily: FONTS.en.regular,
   },
   primaryBtn: {
     flexDirection: 'row',
@@ -176,14 +179,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: COLORS.teal,
-    borderRadius: 14,
+    borderRadius: LAYOUT.buttonRadius,
     paddingVertical: 16,
+    minHeight: 56,
     marginTop: 12,
   },
   pressed: { opacity: 0.92 },
   primaryBtnText: {
     color: COLORS.btnText,
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
   },
 });

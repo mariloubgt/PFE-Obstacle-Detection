@@ -1,18 +1,4 @@
-"""
-Phase 3 — mobile inference API for VisionAid / YOLO testing.
 
-Run on your PC (same Wi‑Fi as the phone):
-  cd PFE-Obstacle-Detection
-  pip install -r api/requirements-api.txt
-  python api/inference_server.py
-
-Optional: set YOLO_MODEL_PATH to a custom .pt file (overrides COCO default).
-
-Default: Ultralytics COCO-pretrained YOLOv8n (80 classes). Override size with COCO_YOLO_MODEL,
-e.g. yolov8s.pt, yolov8m.pt (downloaded/cached by Ultralytics on first run).
-
-Then in the app Settings, set the URL to: http://YOUR_PC_LAN_IP:8787
-"""
 
 from __future__ import annotations
 
@@ -27,12 +13,20 @@ from PIL import Image
 from ultralytics import YOLO
 import uvicorn
 
-# COCO-pretrained weights from Ultralytics (not your custom runs/detect/*/best.pt)
-_DEFAULT_COCO_YOLO = os.environ.get("COCO_YOLO_MODEL", "yolov8n.pt")
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_INDOOR_V8N = _PROJECT_ROOT / "runs" / "detect" / "yolov8n_indoor4" / "weights" / "best.pt"
+_DEFAULT_OOD_V8N = _PROJECT_ROOT / "runs" / "detect" / "yolov8n_ood" / "weights" / "best.pt"
 
 
 def _default_model_path() -> str:
-    return _DEFAULT_COCO_YOLO
+    """Prefer project YOLOv8n trained weights; fall back to Ultralytics yolov8n.pt."""
+    if _DEFAULT_INDOOR_V8N.is_file():
+        return str(_DEFAULT_INDOOR_V8N)
+    if _DEFAULT_OOD_V8N.is_file():
+        return str(_DEFAULT_OOD_V8N)
+    return "yolov8n.pt"
+
 
 
 MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", _default_model_path())

@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { COLORS } from '../constants/theme';
+import { FONTS } from '../constants/typography';
 
 /**
  * Normalized boxes (0–1) from /predict, laid over the camera preview.
@@ -45,7 +46,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: COLORS.teal,
     borderRadius: 4,
-    backgroundColor: 'rgba(45, 212, 191, 0.08)',
+    backgroundColor: 'rgba(102, 210, 177, 0.1)',
   },
   label: {
     position: 'absolute',
@@ -54,7 +55,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(13, 17, 23, 0.92)',
     color: COLORS.tealBright,
     fontSize: 10,
-    fontWeight: '700',
+    fontFamily: FONTS.en.bold,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,

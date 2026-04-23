@@ -8,7 +8,8 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS } from '../constants/theme';
+import { COLORS, LAYOUT } from '../constants/theme';
+import { FONTS } from '../constants/typography';
 
 function FeatureCard({ iconName, iconColor, iconBg, title, subtitle }) {
   return (
@@ -28,19 +29,30 @@ export default function WelcomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={[styles.root, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+    <View
+      style={[
+        styles.root,
+        {
+          paddingTop: insets.top,
+          paddingBottom: Math.max(insets.bottom, 16),
+        },
+      ]}
+    >
       <StatusBar style="light" />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        <Text style={styles.topBrand}>VisionAid</Text>
+        <View
+          style={styles.logoBox}
+          accessibilityLabel="App logo — placeholder for future artwork"
+        />
 
-        <Text style={styles.logoPlaceholder} accessibilityLabel="App logo placeholder">
-          LOGO
-        </Text>
-        <Text style={styles.appTitle}>VisionAid</Text>
+        <View
+          style={styles.appNamePlaceholder}
+          accessibilityLabel="App name — placeholder for future title"
+        />
 
         <Text style={styles.taglineEn}>
           Assistive Navigation System for Visually Impaired People
@@ -77,9 +89,9 @@ export default function WelcomeScreen({ navigation }) {
           style={({ pressed }) => [styles.primaryBtn, pressed && styles.pressed]}
           onPress={() => navigation.navigate('Permissions')}
           accessibilityRole="button"
-          accessibilityLabel="Set up VisionAid"
+          accessibilityLabel="Continue to app setup"
         >
-          <Text style={styles.primaryBtnText}>Set Up VisionAid</Text>
+          <Text style={styles.primaryBtnText}>Set up the app</Text>
           <MaterialCommunityIcons name="arrow-right" size={22} color={COLORS.btnText} />
         </Pressable>
 
@@ -102,49 +114,48 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.bg,
   },
   scrollContent: {
-    paddingHorizontal: 22,
-    paddingTop: 8,
+    paddingHorizontal: LAYOUT.screenPaddingH,
+    paddingTop: 4,
     paddingBottom: 28,
   },
-  topBrand: {
-    textAlign: 'center',
-    color: COLORS.teal,
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 1.2,
+  logoBox: {
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: LAYOUT.logoBoxMaxWidth,
+    height: LAYOUT.logoBoxHeight,
+    borderRadius: LAYOUT.cardRadius,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: COLORS.borderMuted,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
     marginBottom: 20,
   },
-  logoPlaceholder: {
-    textAlign: 'center',
-    color: COLORS.teal,
-    fontSize: 36,
-    fontWeight: '800',
-    letterSpacing: 4,
-    marginBottom: 8,
-  },
-  appTitle: {
-    textAlign: 'center',
-    color: COLORS.white,
-    fontSize: 34,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    marginBottom: 14,
+  appNamePlaceholder: {
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 280,
+    minHeight: LAYOUT.appNameBlockMinHeight,
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderMuted,
   },
   taglineEn: {
     textAlign: 'center',
     color: COLORS.tealBright,
-    fontSize: 14,
-    lineHeight: 20,
-    paddingHorizontal: 8,
-    marginBottom: 8,
+    fontSize: 15,
+    lineHeight: 22,
+    paddingHorizontal: 4,
+    marginBottom: 10,
+    fontFamily: FONTS.en.medium,
   },
   taglineAr: {
     textAlign: 'center',
     color: COLORS.tealBright,
-    fontSize: 15,
+    fontSize: 16,
     lineHeight: 24,
     marginBottom: 28,
     writingDirection: 'rtl',
+    fontFamily: FONTS.ar.regular,
   },
   cardsBlock: {
     gap: 12,
@@ -154,7 +165,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.bgElevated,
-    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.borderMuted,
+    borderRadius: LAYOUT.cardRadius,
     paddingVertical: 14,
     paddingHorizontal: 14,
     gap: 14,
@@ -172,13 +185,13 @@ const styles = StyleSheet.create({
   cardTitle: {
     color: COLORS.white,
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONTS.en.bold,
     marginBottom: 4,
   },
   cardSubtitle: {
     color: COLORS.tealBright,
     fontSize: 13,
-    fontWeight: '500',
+    fontFamily: FONTS.en.medium,
   },
   primaryBtn: {
     flexDirection: 'row',
@@ -186,16 +199,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: COLORS.teal,
-    borderRadius: 14,
+    borderRadius: LAYOUT.buttonRadius,
     paddingVertical: 16,
     paddingHorizontal: 24,
+    minHeight: 56,
     marginBottom: 16,
   },
   pressed: { opacity: 0.92 },
   primaryBtnText: {
     color: COLORS.btnText,
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
   },
   secondaryWrap: {
     alignItems: 'center',
@@ -204,6 +218,6 @@ const styles = StyleSheet.create({
   secondaryLink: {
     color: COLORS.teal,
     fontSize: 15,
-    fontWeight: '600',
+    fontFamily: FONTS.en.semibold,
   },
 });

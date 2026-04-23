@@ -1,6 +1,7 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { COLORS } from '../constants/theme';
+import { FONTS } from '../constants/typography';
 
 /**
  * Barre de navigation avec retour (pour enchaîner les écrans du setup).
@@ -52,6 +53,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: COLORS.white,
     fontSize: 17,
-    fontWeight: '700',
+    fontFamily: FONTS.en.semibold,
   },
 });
