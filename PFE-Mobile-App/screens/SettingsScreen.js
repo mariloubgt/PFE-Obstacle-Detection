@@ -54,7 +54,17 @@ export default function SettingsScreen({ navigation }) {
     try {
       await saveInferenceApiUrl(apiUrl);
       const h = await fetchHealth(apiUrl.trim());
-      setTestMsg(h.ok ? `OK · model: ${h.model_path || 'loaded'}` : 'Unexpected response');
+      setTestMsg(
+        h.ok
+          ? `OK · model: ${h.model_path || 'loaded'}${
+              h.gemini_configured != null
+                ? h.gemini_configured
+                  ? ' · Gemini: on (server key)'
+                  : ' · Gemini: set GEMINI_API_KEY on PC for AI test'
+                : ''
+            }`
+          : 'Unexpected response'
+      );
     } catch (e) {
       setTestMsg(e.message || String(e));
     } finally {

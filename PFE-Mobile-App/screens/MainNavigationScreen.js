@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
+import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -42,8 +43,35 @@ export default function MainNavigationScreen({ navigation }) {
   const [detections, setDetections] = useState([]);
   const [inferenceMs, setInferenceMs] = useState(null);
   const [inferenceError, setInferenceError] = useState(null);
+  const [sceneHint, setSceneHint] = useState(null);
+  const [geminiText, setGeminiText] = useState(null);
+  const [geminiDarija, setGeminiDarija] = useState(null);
+  const [geminiError, setGeminiError] = useState(null);
+  const [geminiRisk, setGeminiRisk] = useState(null);
+  const [geminiFocus, setGeminiFocus] = useState(null);
+  const [pipelineMs, setPipelineMs] = useState(null);
+  /**
+   * Voix: phrase courte + stable, basée sur l’obstacle le plus proche (mêmes nombres que l’UI).
+   * On ne lit PAS Gemini (il change de formulation chaque requête → répétitions incohérentes).
+   */
+  const lastTtsStateRef = useRef('');
+  const lastSpeakTimeRef = useRef(0);
+  const lastSceneTimeRef = useRef(0);
 
   useVolumeSceneQueryTrigger(navigation, { enabled: !volumeOpen });
+
+  useEffect(() => {
+    if (!aiTestEnabled) {
+      Speech.stop();
+      lastTtsStateRef.current = '';
+      lastSpeakTimeRef.current = 0;
+    }
+  }, [aiTestEnabled]);
+
+  useEffect(() => {
+    // Old speech logic removed - now handled in runFrame for better stability
+    return;
+  }, [aiTestEnabled, detections, sceneHint]);
 
   const openSceneQuery = useCallback(() => {
     if (Platform.OS !== 'web') {
@@ -74,6 +102,9 @@ export default function MainNavigationScreen({ navigation }) {
       loadAlertVolume().then((v) => {
         if (v != null) setAlertVolume(v);
       });
+      return () => {
+        Speech.stop();
+      };
     }, [])
   );
 
@@ -107,6 +138,7 @@ export default function MainNavigationScreen({ navigation }) {
       setAiTestEnabled(false);
       return;
     }
+    lastTtsStateRef.current = '';
     const api = await loadInferenceApiUrl();
     if (!api || !api.startsWith('http')) {
       Alert.alert(
@@ -128,6 +160,13 @@ export default function MainNavigationScreen({ navigation }) {
     if (!showCamera || !aiTestEnabled) {
       setDetections([]);
       setInferenceMs(null);
+      setSceneHint(null);
+      setGeminiText(null);
+      setGeminiDarija(null);
+      setGeminiError(null);
+      setGeminiRisk(null);
+      setGeminiFocus(null);
+      setPipelineMs(null);
       if (!aiTestEnabled) setInferenceError(null);
       return;
     }
@@ -138,30 +177,73 @@ export default function MainNavigationScreen({ navigation }) {
       if (cancelled || !aiTestRef.current || !cameraRef.current) return;
       try {
         const api = await loadInferenceApiUrl();
-        if (!api) {
-          setInferenceError('Set API URL in Settings');
-          return;
-        }
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.35,
-          skipProcessing: true,
-        });
+        if (!api) return;
+        
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.25, skipProcessing: true });
         if (cancelled) return;
+        
         const data = await predictImage(api, photo.uri);
         if (cancelled) return;
-        setDetections(data.detections || []);
-        setInferenceMs(typeof data.inference_ms === 'number' ? data.inference_ms : null);
+        
+        const currentDetections = data.detections || [];
+        const currentScene = data.scene?.top5?.[0]?.label || null;
+
+        setDetections(currentDetections);
+        setSceneHint(currentScene);
         setInferenceError(null);
-      } catch (e) {
-        if (!cancelled) {
-          setInferenceError(e.message || String(e));
-          setDetections([]);
+
+        // --- LOGIQUE VOCALE (STABILISÉE) ---
+        if (currentDetections.length > 0) {
+          const now = Date.now();
+          const sorted = [...currentDetections].sort((a, b) => (a.distance_m ?? 99) - (b.distance_m ?? 99));
+          const d0 = sorted[0];
+          
+          const dist = Math.round((d0.distance_m || 0) * 2) / 2;
+          
+          const DARIJA_MAP = {
+            'person': 'شخص', 'bicycle': 'بشكليطة', 'car': 'طوموبيل', 'motorcycle': 'موطور',
+            'bus': 'طوبيس', 'truck': 'كاميو', 'dog': 'كلب', 'bench': 'بنك', 'chair': 'كرسي',
+            'stairs': 'دروج', 'curb': 'طروطوار', 'fire_hydrant': 'بونو ديال الما',
+            'stop_sign': 'بلاكة سطوب', 'traffic_light': 'ضو حمر', 'tree': 'شجرة',
+            'pole': 'poteau', 'waste_container': 'لابوبيل', 'crutch': 'عكاز'
+          };
+          
+          const cleanName = String(d0.name || "").toLowerCase().trim();
+          const rawObj = DARIJA_MAP[cleanName] || cleanName;
+
+          // On ne répète la scène que toutes les 15 secondes
+          const sceneCooldown = now - (lastSceneTimeRef.current || 0) > 15000;
+          let msg = "";
+          
+          // On utilise la traduction Darja de Gemini si elle existe (pour éviter l'accent anglais)
+          const bestSceneDesc = data.gemini?.darija || currentScene;
+
+          if (bestSceneDesc && sceneCooldown) {
+            msg += `راني نشوف: ${bestSceneDesc}. `;
+            lastSceneTimeRef.current = now;
+          }
+          
+          msg += `كاين ${rawObj} على بعد ${dist} متر.`;
+
+          // On parle si l'objet ou la distance (0.5m) a changé ET cooldown de 3s min
+          const stateKey = `${rawObj}|${dist}`;
+          const isDifferent = stateKey !== lastTtsStateRef.current;
+          const globalCooldown = now - lastSpeakTimeRef.current > 3000;
+
+          if (isDifferent && globalCooldown) {
+             lastTtsStateRef.current = stateKey;
+             lastSpeakTimeRef.current = now;
+             Speech.stop();
+             Speech.speak(msg, { language: 'ar-SA', rate: 0.60 });
+          }
         }
+      } catch (e) {
+        if (!cancelled) setInferenceError(e.message);
       }
     };
 
     runFrame();
-    const id = setInterval(runFrame, 2000);
+    const id = setInterval(runFrame, 3000); // 3 secondes entre chaque capture
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -293,27 +375,81 @@ export default function MainNavigationScreen({ navigation }) {
         <View style={styles.alertTextCol}>
           {aiTestEnabled ? (
             <>
-              {detections.length > 0 ? (
+              {inferenceError ? (
                 <>
-                  <Text style={styles.alertTitle}>
-                    {detections[0].name.replace(/_/g, ' ')} ·{' '}
-                    {Math.round((detections[0].confidence || 0) * 100)}%
-                  </Text>
-                  <Text style={styles.inferenceMeta}>
-                    {inferenceMs != null ? `${Math.round(inferenceMs)} ms · ` : ''}
-                    {detections.length} object{detections.length === 1 ? '' : 's'}
+                  <Text style={styles.alertTitle}>Inference issue</Text>
+                  <Text style={styles.inferenceErr} numberOfLines={6}>
+                    {inferenceError}
                   </Text>
                 </>
               ) : (
-                <Text style={styles.alertTitle}>
-                  {inferenceError ? 'Inference issue' : 'Phase 3 · scanning…'}
-                </Text>
+                <>
+                  {sceneHint ? (
+                    <Text style={styles.sceneHint} numberOfLines={1}>
+                      Scene (ImageNet): {sceneHint}
+                    </Text>
+                  ) : null}
+                  {detections.length > 0 ? (
+                    <>
+                      <Text style={styles.alertTitle}>
+                        {detections[0].name.replace(/_/g, ' ')} ·{' '}
+                        {Math.round((detections[0].confidence || 0) * 100)}%
+                        {detections[0].distance_m != null
+                          ? ` · ~${detections[0].distance_m}m`
+                          : ''}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={styles.alertTitle}>AI test · no objects in frame</Text>
+                  )}
+                  {geminiDarija ? (
+                    <Text style={styles.darijaPrimary} numberOfLines={4}>
+                      {geminiDarija}
+                    </Text>
+                  ) : null}
+                  {geminiFocus ? (
+                    <Text style={styles.geminiMeta} numberOfLines={1}>
+                      Focus: {geminiFocus}
+                    </Text>
+                  ) : null}
+                  {geminiRisk && geminiRisk !== 'ok' ? (
+                    <View style={styles.riskPillRow}>
+                      <View
+                        style={[
+                          styles.riskPill,
+                          geminiRisk === 'danger' && styles.riskPillDanger,
+                          geminiRisk === 'caution' && styles.riskPillCaution,
+                          geminiRisk === 'unknown' && styles.riskPillUnknown,
+                        ]}
+                      >
+                        <Text style={styles.riskPillText}>{String(geminiRisk).toUpperCase()}</Text>
+                      </View>
+                    </View>
+                  ) : null}
+                  {geminiText && String(geminiText).trim() !== String(geminiDarija || '').trim() ? (
+                    <Text style={styles.geminiText} numberOfLines={4}>
+                      {geminiText}
+                    </Text>
+                  ) : !geminiDarija && geminiText ? (
+                    <Text style={styles.geminiText} numberOfLines={6}>
+                      {geminiText}
+                    </Text>
+                  ) : null}
+                  {geminiError ? (
+                    <Text style={styles.geminiErr} numberOfLines={3}>
+                      {geminiError}
+                    </Text>
+                  ) : null}
+                  <Text style={styles.inferenceMeta}>
+                    {pipelineMs != null
+                      ? `${Math.round(pipelineMs)} ms (pipeline) · `
+                      : inferenceMs != null
+                        ? `${Math.round(inferenceMs)} ms · `
+                        : ''}
+                    {detections.length} object{detections.length === 1 ? '' : 's'}
+                  </Text>
+                </>
               )}
-              {inferenceError ? (
-                <Text style={styles.inferenceErr} numberOfLines={4}>
-                  {inferenceError}
-                </Text>
-              ) : null}
             </>
           ) : (
             <>
@@ -572,6 +708,64 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     fontFamily: FONTS.en.regular,
+  },
+  sceneHint: {
+    color: COLORS.tealBright,
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  darijaPrimary: {
+    color: COLORS.white,
+    fontSize: 15,
+    lineHeight: 24,
+    marginTop: 4,
+    fontFamily: FONTS.ar.regular,
+    writingDirection: 'rtl',
+  },
+  geminiText: {
+    color: COLORS.grey,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 6,
+    fontFamily: FONTS.en.regular,
+  },
+  geminiErr: {
+    color: '#FBBF24',
+    fontSize: 11,
+    marginTop: 4,
+    fontFamily: FONTS.en.regular,
+  },
+  geminiMeta: {
+    color: COLORS.grey,
+    fontSize: 12,
+    marginTop: 4,
+    fontFamily: FONTS.en.medium,
+  },
+  riskPillRow: {
+    marginTop: 6,
+  },
+  riskPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(34, 197, 94, 0.2)',
+  },
+  riskPillCaution: {
+    backgroundColor: 'rgba(234, 88, 12, 0.25)',
+  },
+  riskPillDanger: {
+    backgroundColor: 'rgba(220, 38, 38, 0.3)',
+  },
+  riskPillUnknown: {
+    backgroundColor: 'rgba(148, 163, 184, 0.25)',
+  },
+  riskPillText: {
+    color: COLORS.white,
+    fontSize: 10,
+    fontWeight: '800',
+    fontFamily: FONTS.en.extrabold,
   },
   badgeRow: {
     flexDirection: 'row',

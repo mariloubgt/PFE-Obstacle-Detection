@@ -28,7 +28,11 @@ export default function DetectionOverlay({ detections = [] }) {
             ]}
           >
             <Text style={styles.label} numberOfLines={1}>
-              {d.name} {Math.round((d.confidence || 0) * 100)}%
+              {(d.name || '').replace(/_/g, ' ')}
+              {d.distance_m != null && d.distance_m !== undefined
+                ? ` ~${d.distance_m}m`
+                : ''}{' '}
+              {Math.round((d.confidence || 0) * 100)}%
             </Text>
           </View>
         );
