@@ -6,7 +6,10 @@ Run on your PC (same Wi‑Fi as the phone):
   pip install -r api/requirements-api.txt
   python api/inference_server.py
 
-Optional: set YOLO_MODEL_PATH to another .pt file.
+Optional: set YOLO_MODEL_PATH to a custom .pt file (overrides COCO default).
+
+Default: Ultralytics COCO-pretrained YOLOv8n (80 classes). Override size with COCO_YOLO_MODEL,
+e.g. yolov8s.pt, yolov8m.pt (downloaded/cached by Ultralytics on first run).
 
 Then in the app Settings, set the URL to: http://YOUR_PC_LAN_IP:8787
 """
@@ -16,7 +19,6 @@ from __future__ import annotations
 import io
 import os
 import time
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, UploadFile
@@ -25,14 +27,12 @@ from PIL import Image
 from ultralytics import YOLO
 import uvicorn
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_OOD_WEIGHTS = _PROJECT_ROOT / "runs" / "detect" / "yolov8n_ood" / "weights" / "best.pt"
+# COCO-pretrained weights from Ultralytics (not your custom runs/detect/*/best.pt)
+_DEFAULT_COCO_YOLO = os.environ.get("COCO_YOLO_MODEL", "yolov8n.pt")
 
 
 def _default_model_path() -> str:
-    if _DEFAULT_OOD_WEIGHTS.is_file():
-        return str(_DEFAULT_OOD_WEIGHTS)
-    return "yolov8n.pt"
+    return _DEFAULT_COCO_YOLO
 
 
 MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", _default_model_path())
