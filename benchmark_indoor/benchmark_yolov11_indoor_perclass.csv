@@ -1,0 +1,3 @@
+model,chair,clock,exit,fireextinguisher,printer,screen,trashbin
+yolo11n,0.8751,0.8469,0.8699,0.8117,0.7981,0.8614,0.7526
+yolo11s,0.869,0.8676,0.8787,0.8331,0.8724,0.8356,0.7487

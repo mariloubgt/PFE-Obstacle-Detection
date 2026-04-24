@@ -1,0 +1,13 @@
+names:
+- chair
+- clock
+- exit
+- fireextinguisher
+- printer
+- screen
+- trashbin
+nc: 7
+path: c:\Users\maria\OneDrive\Desktop\PFE PROJECT\PFE-Obstacle-Detection\dataset_indoor_yolo_new
+test: test/images
+train: train/images
+val: valid/images
