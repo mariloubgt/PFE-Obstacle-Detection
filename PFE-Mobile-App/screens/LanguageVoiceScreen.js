@@ -9,6 +9,7 @@ import ScreenHeader from '../components/ScreenHeader';
 import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
+import { loadPrimaryLang, savePrimaryLang, loadSpeechRate, saveSpeechRate } from '../utils/appSettings';
 
 export default function LanguageVoiceScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -16,18 +17,26 @@ export default function LanguageVoiceScreen({ navigation }) {
   const [speechRate, setSpeechRate] = useState(0.45);
   const [volume, setVolume] = useState(0.66);
 
-  useEffect(() => {
+  const reloadPrefs = useCallback(() => {
     loadAlertVolume().then((v) => {
       if (v != null) setVolume(v);
     });
+    loadPrimaryLang().then((l) => {
+      if (l === 'fr' || l === 'dz') setLang(l);
+    });
+    loadSpeechRate().then((r) => {
+      if (r != null) setSpeechRate(r);
+    });
   }, []);
+
+  useEffect(() => {
+    reloadPrefs();
+  }, [reloadPrefs]);
 
   useFocusEffect(
     useCallback(() => {
-      loadAlertVolume().then((v) => {
-        if (v != null) setVolume(v);
-      });
-    }, [])
+      reloadPrefs();
+    }, [reloadPrefs])
   );
 
   const onAlertVolumeComplete = useCallback(async (v) => {
@@ -60,7 +69,10 @@ export default function LanguageVoiceScreen({ navigation }) {
 
       <View style={styles.langRow}>
         <Pressable
-          onPress={() => setLang('dz')}
+          onPress={async () => {
+            setLang('dz');
+            await savePrimaryLang('dz');
+          }}
           style={[styles.langCard, lang === 'dz' && styles.langCardActive]}
           accessibilityRole="button"
           accessibilityState={{ selected: lang === 'dz' }}
@@ -76,7 +88,10 @@ export default function LanguageVoiceScreen({ navigation }) {
         </Pressable>
 
         <Pressable
-          onPress={() => setLang('fr')}
+          onPress={async () => {
+            setLang('fr');
+            await savePrimaryLang('fr');
+          }}
           style={[styles.langCard, lang === 'fr' && styles.langCardActive]}
           accessibilityRole="button"
           accessibilityState={{ selected: lang === 'fr' }}
@@ -103,6 +118,9 @@ export default function LanguageVoiceScreen({ navigation }) {
           maximumValue={1}
           value={speechRate}
           onValueChange={setSpeechRate}
+          onSlidingComplete={async (v) => {
+            setSpeechRate(await saveSpeechRate(v));
+          }}
           minimumTrackTintColor={COLORS.teal}
           maximumTrackTintColor={COLORS.borderMuted}
           thumbTintColor={COLORS.teal}

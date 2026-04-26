@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
@@ -24,6 +24,7 @@ import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
+import { loadAppPreferences, DEFAULTS } from '../utils/appSettings';
 import { useVolumeSceneQueryTrigger } from '../hooks/useVolumeSceneQueryTrigger';
 import { pickCloseThreat } from '../utils/evaluateCloseThreat';
 
@@ -38,7 +39,9 @@ export default function MainNavigationScreen({ navigation }) {
   const [torch, setTorch] = useState(false);
   const [tapFlash, setTapFlash] = useState(false);
   const [volumeOpen, setVolumeOpen] = useState(false);
-  const [alertVolume, setAlertVolume] = useState(0.66);
+  const [alertVolume, setAlertVolume] = useState(0.8);
+  const [appPrefs, setAppPrefs] = useState(null);
+  const prefs = useMemo(() => appPrefs || DEFAULTS, [appPrefs]);
 
   /** Phase 3: periodic frame → POST /predict */
   const [aiTestEnabled, setAiTestEnabled] = useState(false);
@@ -110,6 +113,7 @@ export default function MainNavigationScreen({ navigation }) {
       loadAlertVolume().then((v) => {
         if (v != null) setAlertVolume(v);
       });
+      loadAppPreferences().then(setAppPrefs);
       return () => {
         Speech.stop();
       };
@@ -190,7 +194,9 @@ export default function MainNavigationScreen({ navigation }) {
         const photo = await cameraRef.current.takePictureAsync({ quality: 0.25, skipProcessing: true });
         if (cancelled) return;
         
-        const data = await predictImage(api, photo.uri);
+        const data = await predictImage(api, photo.uri, {
+          useGemini: prefs.internetGemini,
+        });
         if (cancelled) return;
         
         const currentDetections = data.detections || [];
@@ -242,7 +248,7 @@ export default function MainNavigationScreen({ navigation }) {
              lastTtsStateRef.current = stateKey;
              lastSpeakTimeRef.current = now;
              Speech.stop();
-             Speech.speak(msg, { language: 'ar-SA', rate: 0.60 });
+             Speech.speak(msg, { language: 'ar-SA', rate: prefs.speechRate });
           }
         }
       } catch (e) {
@@ -251,12 +257,12 @@ export default function MainNavigationScreen({ navigation }) {
     };
 
     runFrame();
-    const id = setInterval(runFrame, 3000); // 3 secondes entre chaque capture
+    const id = setInterval(runFrame, prefs.aiFrameMs);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [showCamera, aiTestEnabled]);
+  }, [showCamera, aiTestEnabled, prefs]);
 
   useEffect(() => {
     if (!aiTestEnabled || !showCamera) {
@@ -266,7 +272,9 @@ export default function MainNavigationScreen({ navigation }) {
       setDangerPayload(null);
       return;
     }
-    const threat = pickCloseThreat(detections);
+    const threat = pickCloseThreat(detections, {
+      dangerWithinMeters: prefs.dangerThresholdM,
+    });
     if (threat) {
       safeStreakRef.current = 0;
       if (manualSuppressRef.current) {
@@ -281,7 +289,7 @@ export default function MainNavigationScreen({ navigation }) {
         dangerSoundPlayedRef.current = false;
       }
     }
-  }, [detections, aiTestEnabled, showCamera]);
+  }, [detections, aiTestEnabled, showCamera, prefs.dangerThresholdM]);
 
   useEffect(() => {
     if (!dangerPayload) {
@@ -291,12 +299,12 @@ export default function MainNavigationScreen({ navigation }) {
       return;
     }
     dangerSoundPlayedRef.current = true;
-    if (Platform.OS !== 'web') {
+    if (Platform.OS !== 'web' && prefs.vibrationDanger) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
     Speech.stop();
-    Speech.speak(dangerPayload.arMessage, { language: 'ar-SA', rate: 0.95 });
-  }, [dangerPayload]);
+    Speech.speak(dangerPayload.arMessage, { language: 'ar-SA', rate: prefs.speechRate });
+  }, [dangerPayload, prefs.vibrationDanger, prefs.speechRate]);
 
   const onDangerBack = useCallback(() => {
     Speech.stop();
@@ -360,7 +368,7 @@ export default function MainNavigationScreen({ navigation }) {
                 ref={cameraRef}
                 style={StyleSheet.absoluteFill}
                 facing={facing}
-                enableTorch={torch}
+                enableTorch={torch || (prefs.lowLight && aiTestEnabled)}
                 mode="picture"
               />
               <DetectionOverlay detections={detections} />
