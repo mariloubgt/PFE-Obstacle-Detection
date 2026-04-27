@@ -5,7 +5,6 @@ import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -13,14 +12,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// --- CONFIG RADAR ---
-const DANGER_DIST_M = 1.8;
-const COOLDOWN_MS = 5000;
-const MIN_CHANGE_M = 0.40;
+// --- CONFIGURATION RADAR (SIMPLE & BASIQUE) ---
+const COOLDOWN_MS = 5000;      // Temps minimum avant de répéter le même objet
+const DIST_CHANGE_M = 0.40;    // Ne répète pas si ça bouge de moins de 40cm
 
-const FR_MAP = {
+const FR_NAMES = {
   person: 'une personne', car: 'une voiture', dog: 'un chien', bench: 'un banc',
-  chair: 'une chaise', stairs: 'des escaliers', curb: 'un trottoir'
+  chair: 'une chaise', stairs: 'des escaliers', curb: 'un trottoir', tree: 'un arbre',
+  bus: 'un bus', motorcycle: 'une moto', bicycle: 'un vélo'
 };
 
 export default function MainNavigationScreen({ navigation }) {
@@ -32,27 +31,34 @@ export default function MainNavigationScreen({ navigation }) {
   
   const lastSpokenTime = useRef({});
   const lastSpokenDist = useRef({});
-  const lastGlobalSpeak = useRef(0);
+  const lastGlobalTime = useRef(0);
 
+  // --- LOGIQUE VOCALE BASIQUE ---
   const handleVoiceFeedback = (current) => {
     if (current.length === 0) return;
     const now = Date.now();
-    if (now - lastGlobalSpeak.current < 1500) return;
 
-    const top = [...current].sort((a,b) => a.distance_m - b.distance_m)[0];
+    // Empêche les phrases de se chevaucher (1.5s entre chaque phrase)
+    if (now - lastGlobalTime.current < 1500) return;
+
+    // On prend l'objet le plus proche
+    const sorted = [...current].sort((a,b) => a.distance_m - b.distance_m);
+    const top = sorted[0];
     const cls = top.name;
+
     const lastT = lastSpokenTime.current[cls] || 0;
     const lastD = lastSpokenDist.current[cls] || 99;
 
-    const timePassed = (now - lastT) > COOLDOWN_MS;
-    const moved = Math.abs(lastD - top.distance_m) > MIN_CHANGE_M;
+    const expired = (now - lastT) > COOLDOWN_MS;
+    const moved = Math.abs(lastD - top.distance_m) > DIST_CHANGE_M;
 
-    if (timePassed || moved) {
+    // On ne parle que si l'objet est nouveau, s'il a bougé ou si le temps est écoulé
+    if (expired || moved) {
         lastSpokenTime.current[cls] = now;
         lastSpokenDist.current[cls] = top.distance_m;
-        lastGlobalSpeak.current = now;
+        lastGlobalTime.current = now;
         
-        const frName = FR_MAP[cls] || cls;
+        const frName = FR_NAMES[cls] || cls;
         const msg = `${frName} à ${top.distance_m.toFixed(1)} mètres`;
         
         Speech.stop();
@@ -60,10 +66,11 @@ export default function MainNavigationScreen({ navigation }) {
     }
   };
 
+  // --- CAPTURE ET ENVOI AU SERVEUR ---
   const runFrame = async () => {
     if (!aiTestEnabled || !cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.2, skipProcessing: true });
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.15, skipProcessing: true });
       const formData = new FormData();
       formData.append('file', { uri: photo.uri, name: 'image.jpg', type: 'image/jpeg' });
       
@@ -74,40 +81,62 @@ export default function MainNavigationScreen({ navigation }) {
       });
       
       const data = await response.json();
-      const dets = (data.detections || []).filter(d => d.distance_m < 5.0);
-      setDetections(dets);
-      handleVoiceFeedback(dets);
-    } catch (e) { console.log("Error:", e); }
+      // On ne garde que ce qui est utile pour la navigation (< 5m)
+      const valid = (data.detections || []).filter(d => d.distance_m < 5.0);
+      setDetections(valid);
+      handleVoiceFeedback(valid);
+    } catch (e) {
+      console.log("Inference Error:", e.message);
+    }
   };
 
   useEffect(() => {
-    let interval = null;
+    let timer = null;
     if (aiTestEnabled) {
-      interval = setInterval(runFrame, 800);
+      // Analyse toutes les 800ms pour une bonne réactivité
+      timer = setInterval(runFrame, 800);
     } else {
       Speech.stop();
       setDetections([]);
+      lastSpokenTime.current = {};
     }
-    return () => { if (interval) clearInterval(interval); };
+    return () => { if (timer) clearInterval(timer); };
   }, [aiTestEnabled]);
 
   if (!permission) return <View />;
-  if (!permission.granted) return <View style={styles.root}><Text>No camera permission</Text></View>;
+  if (!permission.granted) {
+    return (
+      <View style={styles.root}>
+        <Text style={styles.whiteText}>Camera access is required.</Text>
+        <TouchableOpacity style={styles.btn} onPress={requestPermission}>
+          <Text style={styles.btnText}>Allow Camera</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
+      <StatusBar style="light" />
       <CameraView ref={cameraRef} style={styles.camera} facing="back" />
       
       <View style={styles.overlay}>
-        <TouchableOpacity style={[styles.btn, aiTestEnabled && styles.btnOn]} onPress={() => setAiTestEnabled(!aiTestEnabled)}>
+        <TouchableOpacity 
+          style={[styles.btn, aiTestEnabled && styles.btnOn]} 
+          onPress={() => setAiTestEnabled(!aiTestEnabled)}
+        >
             <MaterialCommunityIcons name="brain" size={30} color="white" />
-            <Text style={styles.btnText}>{aiTestEnabled ? "RADAR ON" : "START AI"}</Text>
+            <Text style={styles.btnText}>{aiTestEnabled ? "RADAR ACTIVÉ" : "LANCER RADAR IA"}</Text>
         </TouchableOpacity>
         
-        <View style={styles.stats}>
-           {detections.map((d, i) => (
-             <Text key={i} style={styles.detText}>{d.name}: {d.distance_m.toFixed(1)}m</Text>
-           ))}
+        <View style={styles.statsContainer}>
+           {detections.length > 0 ? (
+             detections.map((d, i) => (
+               <Text key={i} style={styles.detText}>{d.name}: {d.distance_m.toFixed(1)}m</Text>
+             ))
+           ) : (
+             aiTestEnabled && <Text style={styles.detText}>Recherche d'obstacles...</Text>
+           )}
         </View>
       </View>
     </View>
@@ -117,10 +146,35 @@ export default function MainNavigationScreen({ navigation }) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: 'black' },
   camera: { flex: 1 },
-  overlay: { position: 'absolute', top: 50, left: 0, right: 0, bottom: 20, alignItems: 'center', justifyContent: 'space-between' },
-  btn: { backgroundColor: '#444', padding: 20, borderRadius: 50, flexDirection: 'row', alignItems: 'center' },
-  btnOn: { backgroundColor: '#007AFF' },
-  btnText: { color: 'white', fontWeight: 'bold', marginLeft: 10 },
-  stats: { backgroundColor: 'rgba(0,0,0,0.5)', padding: 10, borderRadius: 10 },
-  detText: { color: 'white', fontSize: 18 }
+  overlay: { 
+    position: 'absolute', 
+    top: 60, 
+    left: 0, 
+    right: 0, 
+    bottom: 40, 
+    alignItems: 'center', 
+    justifyContent: 'space-between' 
+  },
+  btn: { 
+    backgroundColor: 'rgba(255,255,255,0.2)', 
+    paddingVertical: 15, 
+    paddingHorizontal: 30, 
+    borderRadius: 50, 
+    flexDirection: 'row', 
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'white'
+  },
+  btnOn: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
+  btnText: { color: 'white', fontWeight: 'bold', fontSize: 18, marginLeft: 10 },
+  statsContainer: { 
+    backgroundColor: 'rgba(0,0,0,0.6)', 
+    padding: 15, 
+    borderRadius: 15, 
+    width: '80%',
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1
+  },
+  detText: { color: '#00FF00', fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 5 },
+  whiteText: { color: 'white', textAlign: 'center', marginBottom: 20 }
 });

@@ -26,7 +26,12 @@ function explainNetworkFailure(base, err) {
   return msg;
 }
 
-export async function predictImage(apiBase, imageUri) {
+/**
+ * @param {string} imageUri
+ * @param {{ useGemini?: boolean }} [options] — if useGemini is false, server may skip Gemini (when supported)
+ */
+export async function predictImage(apiBase, imageUri, options = {}) {
+  const { useGemini = true } = options;
   const base = (apiBase || '').replace(/\/$/, '');
   if (!base.startsWith('http')) {
     throw new Error('Invalid API URL. Set it in Settings (Phase 3 server).');
@@ -39,6 +44,7 @@ export async function predictImage(apiBase, imageUri) {
     name: 'frame.jpg',
     type: 'image/jpeg',
   });
+  form.append('use_gemini', useGemini ? 'true' : 'false');
 
   let res;
   try {

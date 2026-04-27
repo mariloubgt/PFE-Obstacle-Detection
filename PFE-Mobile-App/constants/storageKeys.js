@@ -1,5 +1,9 @@
-/** Same key for Language & Voice and Live screen volume modal — stays in sync. */
 export const ALERT_VOLUME_KEY = '@visionaid_alert_volume';
-
-/** Phase 3: PC inference server base URL, e.g. http://192.168.1.20:8787 */
 export const INFERENCE_API_URL_KEY = '@visionaid_inference_api_url';
+export const SPEECH_RATE_KEY = '@visionaid_speech_rate';
+export const VIBRATION_DANGER_KEY = '@visionaid_vibration_danger';
+export const DANGER_THRESHOLD_M_KEY = '@visionaid_danger_threshold_m';
+export const AI_FRAME_MS_KEY = '@visionaid_ai_frame_ms';
+export const LOW_LIGHT_KEY = '@visionaid_low_light';
+export const PRIMARY_LANG_KEY = '@visionaid_primary_lang';
+export const INTERNET_GEMINI_KEY = '@visionaid_internet_gemini';

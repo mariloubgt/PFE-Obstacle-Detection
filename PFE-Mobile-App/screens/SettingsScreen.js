@@ -1,34 +1,133 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   ActivityIndicator,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
 import { fetchHealth } from '../services/predict';
-import { COLORS } from '../constants/theme';
+import { COLORS, LAYOUT } from '../constants/theme';
+import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl, saveInferenceApiUrl } from '../utils/inferenceApiUrl';
+import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
+import {
+  loadSpeechRate,
+  saveSpeechRate,
+  loadVibrationDanger,
+  saveVibrationDanger,
+  loadDangerThresholdM,
+  saveDangerThresholdM,
+  loadAiFrameMs,
+  saveAiFrameMs,
+  loadLowLight,
+  saveLowLight,
+  loadPrimaryLang,
+  loadInternetGemini,
+  saveInternetGemini,
+} from '../utils/appSettings';
 
-function Row({ icon, label, onPress }) {
+const SPEECH_OPTIONS = [
+  { label: 'Slow', value: 0.4 },
+  { label: 'Normal', value: 0.6 },
+  { label: 'Fast', value: 0.85 },
+];
+
+const FRAME_PRESETS = [
+  { label: '0.5 fps', ms: 2000 },
+  { label: '1 fps', ms: 1000 },
+  { label: '1.5 fps', ms: 666 },
+  { label: '2 fps', ms: 500 },
+  { label: '0.33 fps', ms: 3000 },
+];
+
+function formatFrameValue(ms) {
+  const f = 1000 / ms;
+  const rounded = Math.abs(f - 1) < 0.08 ? 1 : Math.round(f * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)} fps`;
+}
+
+function snapSpeechLabel(rate) {
+  let best = SPEECH_OPTIONS[1];
+  let d = 99;
+  for (const o of SPEECH_OPTIONS) {
+    const c = Math.abs(o.value - rate);
+    if (c < d) {
+      d = c;
+      best = o;
+    }
+  }
+  return best;
+}
+
+function snapFrameMs(ms) {
+  let best = FRAME_PRESETS[1].ms;
+  let d = 1e9;
+  for (const p of FRAME_PRESETS) {
+    const c = Math.abs(p.ms - ms);
+    if (c < d) {
+      d = c;
+      best = p.ms;
+    }
+  }
+  return best;
+}
+
+function InsetDivider() {
+  return <View style={styles.insetDivider} />;
+}
+
+function Section({ label, children }) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionLabel}>{label}</Text>
+      <View style={styles.card}>{children}</View>
+    </View>
+  );
+}
+
+function ValueRow({ title, subtitle, value, onPress, last }) {
   return (
     <Pressable
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       onPress={onPress}
+      style={({ pressed }) => [styles.valueRow, pressed && styles.pressed, last && styles.valueRowLast]}
       accessibilityRole="button"
-      accessibilityLabel={label}
     >
-      <MaterialCommunityIcons name={icon} size={22} color={COLORS.tealBright} />
-      <Text style={styles.rowLabel}>{label}</Text>
-      <MaterialCommunityIcons name="chevron-right" size={22} color={COLORS.grey} />
+      <View style={styles.valueRowText}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+      </View>
+      <Text style={styles.valueRight}>{value}</Text>
     </Pressable>
+  );
+}
+
+function ToggleRow({ title, subtitle, value, onValueChange, last }) {
+  return (
+    <View style={[styles.valueRow, last && styles.valueRowLast]}>
+      <View style={styles.valueRowText}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ false: 'rgba(102, 210, 177, 0.15)', true: COLORS.teal }}
+        thumbColor={Platform.OS === 'ios' ? COLORS.white : COLORS.btnText}
+        ios_backgroundColor="rgba(102, 210, 177, 0.15)"
+      />
+    </View>
   );
 }
 
@@ -38,9 +137,40 @@ export default function SettingsScreen({ navigation }) {
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState(null);
 
-  useEffect(() => {
-    loadInferenceApiUrl().then(setApiUrl);
+  const [vol, setVol] = useState(0.8);
+  const [volOpen, setVolOpen] = useState(false);
+  const [thr, setThr] = useState(0.8);
+  const [thrOpen, setThrOpen] = useState(false);
+  const [speech, setSpeech] = useState(0.6);
+  const [speechOpen, setSpeechOpen] = useState(false);
+  const [frameMs, setFrameMs] = useState(1000);
+  const [frameOpen, setFrameOpen] = useState(false);
+  const [vib, setVib] = useState(true);
+  const [lowLight, setLowLight] = useState(true);
+  const [lang, setLang] = useState('dz');
+  const [gem, setGem] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    setApiUrl(await loadInferenceApiUrl());
+    setVol(await loadAlertVolume());
+    setSpeech(await loadSpeechRate());
+    setVib(await loadVibrationDanger());
+    setThr(await loadDangerThresholdM());
+    setFrameMs(snapFrameMs(await loadAiFrameMs()));
+    setLowLight(await loadLowLight());
+    setLang(await loadPrimaryLang());
+    setGem(await loadInternetGemini());
   }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadAll();
+    }, [loadAll])
+  );
 
   const onSaveUrl = useCallback(async () => {
     await saveInferenceApiUrl(apiUrl);
@@ -72,10 +202,22 @@ export default function SettingsScreen({ navigation }) {
     }
   }, [apiUrl]);
 
+  const speechLabel = snapSpeechLabel(speech).label;
+
   return (
-    <View style={[styles.root, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
+    <View
+      style={[
+        styles.root,
+        { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) },
+      ]}
+    >
       <StatusBar style="light" />
-      <ScreenHeader title="Settings" onBack={() => navigation.goBack()} />
+      <ScreenHeader
+        title="Settings"
+        subtitle="VisionAid v1.0.0 beta"
+        onBack={() => navigation.goBack()}
+        circularBack
+      />
 
       <ScrollView
         style={styles.scroll}
@@ -83,60 +225,246 @@ export default function SettingsScreen({ navigation }) {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.sectionTitle}>Phase 3 — AI server (PC)</Text>
-        <Text style={styles.sectionHint}>
-          Same Wi‑Fi as this phone. On your computer run:{' '}
-          <Text style={styles.mono}>python api/inference_server.py</Text>
-          {'\n'}
-          Then paste your PC IP, e.g. http://192.168.0.15:8787
-        </Text>
-        <TextInput
-          style={styles.input}
-          value={apiUrl}
-          onChangeText={setApiUrl}
-          placeholder="http://192.168.x.x:8787"
-          placeholderTextColor={COLORS.greyDark}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        <View style={styles.rowBtns}>
-          <Pressable style={styles.smallBtn} onPress={onSaveUrl}>
-            <Text style={styles.smallBtnText}>Save URL</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.smallBtn, styles.smallBtnPrimary]}
-            onPress={onTestConnection}
-            disabled={testing}
-          >
-            {testing ? (
-              <ActivityIndicator color={COLORS.btnText} size="small" />
-            ) : (
-              <Text style={styles.smallBtnTextDark}>Test connection</Text>
-            )}
-          </Pressable>
-        </View>
-        {testMsg ? <Text style={styles.testMsg}>{testMsg}</Text> : null}
+        <Section label="Audio">
+          <ValueRow
+            title="Alert Volume"
+            subtitle="Spoken obstacle warnings"
+            value={`${Math.round(vol * 100)}%`}
+            onPress={() => setVolOpen(true)}
+          />
+          <InsetDivider />
+          <ValueRow
+            title="Speech Rate"
+            subtitle="Daridja TTS speed"
+            value={speechLabel}
+            onPress={() => setSpeechOpen(true)}
+          />
+          <InsetDivider />
+          <ToggleRow
+            title="Vibration on Danger"
+            last
+            value={vib}
+            onValueChange={async (b) => setVib(await saveVibrationDanger(b))}
+          />
+        </Section>
 
-        <View style={styles.card}>
-          <Row
-            icon="translate"
-            label="Language & voice"
+        <Section label="Detection">
+          <ValueRow
+            title="Danger Threshold"
+            subtitle="Trigger distance for red alert"
+            value={`${thr.toFixed(1)}m`}
+            onPress={() => setThrOpen(true)}
+          />
+          <InsetDivider />
+          <ValueRow
+            title="Frame Rate"
+            subtitle="YOLO processing speed"
+            value={formatFrameValue(frameMs)}
+            onPress={() => setFrameOpen(true)}
+          />
+          <InsetDivider />
+          <ToggleRow
+            title="Low-light Mode"
+            subtitle="Auto-detect poor visibility"
+            last
+            value={lowLight}
+            onValueChange={async (b) => setLowLight(await saveLowLight(b))}
+          />
+        </Section>
+
+        <Section label="Language">
+          <ValueRow
+            title="Primary Language"
+            value={lang === 'dz' ? 'دارجة' : 'Français'}
             onPress={() => navigation.navigate('LanguageVoice')}
           />
-          <View style={styles.divider} />
-          <Row
-            icon="shield-check-outline"
-            label="App permissions"
-            onPress={() => navigation.navigate('Permissions')}
+          <InsetDivider />
+          <ToggleRow
+            title="Internet for Gemini"
+            last
+            value={gem}
+            onValueChange={async (b) => setGem(await saveInternetGemini(b))}
           />
+        </Section>
+
+        <View style={styles.serverSection}>
+          <Text style={styles.serverTitle}>Phase 3 — AI server (PC)</Text>
+          <Text style={styles.serverHint}>
+            Same Wi‑Fi as this phone. On your computer run:{' '}
+            <Text style={styles.mono}>python api/inference_server.py</Text>
+            {'\n'}
+            Then paste your PC IP, e.g. http://192.168.0.15:8787
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={apiUrl}
+            onChangeText={setApiUrl}
+            placeholder="http://192.168.x.x:8787"
+            placeholderTextColor={COLORS.greyDark}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <View style={styles.rowBtns}>
+            <Pressable style={styles.smallBtn} onPress={onSaveUrl}>
+              <Text style={styles.smallBtnText}>Save URL</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.smallBtn, styles.smallBtnPrimary]}
+              onPress={onTestConnection}
+              disabled={testing}
+            >
+              {testing ? (
+                <ActivityIndicator color={COLORS.btnText} size="small" />
+              ) : (
+                <Text style={styles.smallBtnTextDark}>Test connection</Text>
+              )}
+            </Pressable>
+          </View>
+          {testMsg ? <Text style={styles.testMsg}>{testMsg}</Text> : null}
+        </View>
+
+        <View style={styles.card}>
+          <Pressable
+            style={({ pressed }) => [styles.navRow, styles.navRowLast, pressed && styles.pressed]}
+            onPress={() => navigation.navigate('Permissions')}
+          >
+            <MaterialCommunityIcons name="shield-check-outline" size={22} color={COLORS.teal} />
+            <Text style={styles.navRowText}>App permissions</Text>
+            <MaterialCommunityIcons name="chevron-right" size={22} color={COLORS.grey} />
+          </Pressable>
         </View>
 
         <Text style={styles.hint}>
-          Use the volume button on the live screen for alert loudness. Turn on “AI test” on the live
-          screen to send camera frames to your PC model.
+          Use the volume control on the live screen for quick alert loudness. “Internet for Gemini”
+          uses your server when the PC allows it; turn off to skip cloud enrichment on the model
+          request.
         </Text>
       </ScrollView>
+
+      <Modal visible={volOpen} transparent animationType="fade" onRequestClose={() => setVolOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setVolOpen(false)}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Alert volume</Text>
+            <Text style={styles.modalHint}>
+              Spoken obstacle warnings — {Math.round(vol * 100)}%
+            </Text>
+            <Slider
+              style={styles.modalSlider}
+              minimumValue={0}
+              maximumValue={1}
+              value={vol}
+              onValueChange={setVol}
+              onSlidingComplete={async (v) => setVol(await saveAlertVolume(v))}
+              minimumTrackTintColor={COLORS.teal}
+              maximumTrackTintColor={COLORS.borderMuted}
+              thumbTintColor={COLORS.teal}
+            />
+            <View style={styles.modalEnds}>
+              <Text style={styles.endLabel}>0%</Text>
+              <Text style={styles.endLabel}>100%</Text>
+            </View>
+            <Pressable style={styles.modalDone} onPress={() => setVolOpen(false)}>
+              <Text style={styles.modalDoneText}>Done</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={thrOpen} transparent animationType="fade" onRequestClose={() => setThrOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setThrOpen(false)}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Danger threshold</Text>
+            <Text style={styles.modalHint}>
+              Red full-screen alert when an obstacle is within {thr.toFixed(1)}m
+            </Text>
+            <Slider
+              style={styles.modalSlider}
+              minimumValue={0.2}
+              maximumValue={2}
+              value={thr}
+              onValueChange={setThr}
+              onSlidingComplete={async (v) => setThr(await saveDangerThresholdM(v))}
+              minimumTrackTintColor={COLORS.teal}
+              maximumTrackTintColor={COLORS.borderMuted}
+              thumbTintColor={COLORS.teal}
+            />
+            <View style={styles.modalEnds}>
+              <Text style={styles.endLabel}>0.2m</Text>
+              <Text style={styles.endLabel}>2m</Text>
+            </View>
+            <Pressable style={styles.modalDone} onPress={() => setThrOpen(false)}>
+              <Text style={styles.modalDoneText}>Done</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={speechOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSpeechOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setSpeechOpen(false)}>
+          <View style={styles.pickerCard}>
+            <Text style={styles.modalTitle}>Speech rate</Text>
+            <Text style={styles.modalHint}>Daridja TTS speed</Text>
+            {SPEECH_OPTIONS.map((o) => (
+              <Pressable
+                key={o.label}
+                style={({ pressed }) => [styles.pickerRow, pressed && styles.pressed]}
+                onPress={async () => {
+                  const v = await saveSpeechRate(o.value);
+                  setSpeech(v);
+                  setSpeechOpen(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.pickerLabel,
+                    o.value === snapSpeechLabel(speech).value && styles.pickerLabelOn,
+                  ]}
+                >
+                  {o.label}
+                </Text>
+                {o.value === snapSpeechLabel(speech).value ? (
+                  <MaterialCommunityIcons name="check" size={22} color={COLORS.teal} />
+                ) : null}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={frameOpen} transparent animationType="fade" onRequestClose={() => setFrameOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setFrameOpen(false)}>
+          <View style={styles.pickerCard}>
+            <Text style={styles.modalTitle}>Frame rate</Text>
+            <Text style={styles.modalHint}>YOLO processing speed (may heat the device)</Text>
+            {FRAME_PRESETS.map((p) => (
+              <Pressable
+                key={p.label}
+                style={({ pressed }) => [styles.pickerRow, pressed && styles.pressed]}
+                onPress={async () => {
+                  const m = await saveAiFrameMs(p.ms);
+                  setFrameMs(m);
+                  setFrameOpen(false);
+                }}
+              >
+                <Text
+                  style={[styles.pickerLabel, p.ms === frameMs && styles.pickerLabelOn]}
+                >
+                  {p.label}
+                </Text>
+                {p.ms === frameMs ? (
+                  <MaterialCommunityIcons name="check" size={22} color={COLORS.teal} />
+                ) : null}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -145,26 +473,78 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: COLORS.bg,
+    paddingHorizontal: LAYOUT.screenPaddingH,
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 32, gap: 4 },
+  section: {
+    marginTop: 12,
+  },
+  sectionLabel: {
+    color: COLORS.teal,
+    fontSize: 12,
+    fontFamily: FONTS.en.extrabold,
+    letterSpacing: 1.2,
+    marginBottom: 8,
+    marginLeft: 4,
+    textTransform: 'uppercase',
+  },
+  card: {
+    backgroundColor: COLORS.bgElevated,
+    borderRadius: LAYOUT.cardRadius,
+    borderWidth: 1,
+    borderColor: COLORS.borderMuted,
+    overflow: 'hidden',
+  },
+  valueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
     paddingHorizontal: 16,
+    gap: 12,
+    minHeight: 64,
   },
-  scroll: {
-    flex: 1,
+  valueRowLast: {
+    paddingBottom: 16,
   },
-  scrollContent: {
-    paddingBottom: 24,
+  valueRowText: { flex: 1, minWidth: 0 },
+  rowTitle: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontFamily: FONTS.en.semibold,
   },
-  sectionTitle: {
+  rowSubtitle: {
+    color: COLORS.grey,
+    fontSize: 12,
+    marginTop: 4,
+    fontFamily: FONTS.en.regular,
+  },
+  valueRight: {
+    color: COLORS.teal,
+    fontSize: 15,
+    fontFamily: FONTS.en.semibold,
+  },
+  pressed: { opacity: 0.88 },
+  insetDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: COLORS.borderMuted,
+    marginLeft: 16,
+    marginRight: 16,
+  },
+  serverSection: { marginTop: 20 },
+  serverTitle: {
     color: COLORS.white,
     fontSize: 17,
-    fontWeight: '800',
-    marginTop: 8,
+    fontFamily: FONTS.en.extrabold,
     marginBottom: 8,
   },
-  sectionHint: {
+  serverHint: {
     color: COLORS.grey,
     fontSize: 13,
     lineHeight: 20,
     marginBottom: 12,
+    fontFamily: FONTS.en.regular,
   },
   mono: {
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
@@ -181,12 +561,9 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 15,
     marginBottom: 12,
+    fontFamily: FONTS.en.regular,
   },
-  rowBtns: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
-  },
+  rowBtns: { flexDirection: 'row', gap: 10, marginBottom: 10 },
   smallBtn: {
     flex: 1,
     paddingVertical: 12,
@@ -195,53 +572,24 @@ const styles = StyleSheet.create({
     borderColor: COLORS.teal,
     alignItems: 'center',
   },
-  smallBtnPrimary: {
-    backgroundColor: COLORS.teal,
-    borderColor: COLORS.teal,
-  },
-  smallBtnText: {
-    color: COLORS.teal,
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  smallBtnTextDark: {
-    color: COLORS.btnText,
-    fontWeight: '800',
-    fontSize: 15,
-  },
-  testMsg: {
-    color: COLORS.tealBright,
-    fontSize: 13,
-    marginBottom: 16,
-  },
-  card: {
-    backgroundColor: COLORS.bgElevated,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.borderMuted,
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  row: {
+  smallBtnPrimary: { backgroundColor: COLORS.teal, borderColor: COLORS.teal },
+  smallBtnText: { color: COLORS.teal, fontWeight: '700', fontSize: 15, fontFamily: FONTS.en.semibold },
+  smallBtnTextDark: { color: COLORS.btnText, fontWeight: '800', fontSize: 15, fontFamily: FONTS.en.extrabold },
+  testMsg: { color: COLORS.tealBright, fontSize: 13, marginBottom: 8, fontFamily: FONTS.en.regular },
+  navRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 16,
     paddingHorizontal: 14,
     gap: 12,
   },
-  rowPressed: {
-    opacity: 0.85,
-  },
-  rowLabel: {
+  navRowLast: { paddingBottom: 18 },
+  navRowText: {
     flex: 1,
     color: COLORS.white,
     fontSize: 16,
     fontWeight: '600',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: COLORS.borderMuted,
-    marginLeft: 48,
+    fontFamily: FONTS.en.semibold,
   },
   hint: {
     color: COLORS.grey,
@@ -249,5 +597,54 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 20,
     paddingHorizontal: 4,
+    fontFamily: FONTS.en.regular,
   },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+    padding: 20,
+  },
+  modalCard: {
+    backgroundColor: COLORS.bgElevated,
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: COLORS.borderMuted,
+  },
+  pickerCard: {
+    backgroundColor: COLORS.bgElevated,
+    borderRadius: 16,
+    padding: 16,
+    paddingBottom: 8,
+    borderWidth: 1,
+    borderColor: COLORS.borderMuted,
+  },
+  modalTitle: {
+    color: COLORS.white,
+    fontSize: 20,
+    fontFamily: FONTS.en.extrabold,
+    marginBottom: 6,
+  },
+  modalHint: {
+    color: COLORS.grey,
+    fontSize: 14,
+    marginBottom: 16,
+    fontFamily: FONTS.en.regular,
+  },
+  modalSlider: { width: '100%', height: 44 },
+  modalEnds: { flexDirection: 'row', justifyContent: 'space-between', marginTop: -4, marginBottom: 16 },
+  endLabel: { color: COLORS.grey, fontSize: 12, fontFamily: FONTS.en.regular },
+  modalDone: { alignSelf: 'flex-end', paddingVertical: 10, paddingHorizontal: 16 },
+  modalDoneText: { color: COLORS.teal, fontSize: 17, fontFamily: FONTS.en.semibold },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.borderMuted,
+  },
+  pickerLabel: { color: COLORS.white, fontSize: 16, fontFamily: FONTS.en.medium },
+  pickerLabelOn: { color: COLORS.teal, fontFamily: FONTS.en.semibold },
 });

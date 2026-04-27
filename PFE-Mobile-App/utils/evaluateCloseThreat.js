@@ -4,7 +4,7 @@
  * If missing, estimates distance from normalized bounding-box area (larger box → closer).
  */
 
-const DANGER_WITHIN_METERS = 1.15;
+const DANGER_WITHIN_DEFAULT_M = 1.15;
 const MIN_CONFIDENCE = 0.32;
 const MIN_BOX_AREA = 0.012;
 
@@ -32,9 +32,16 @@ function classKey(name) {
 }
 
 /**
+ * @param {object} [options]
+ * @param {number} [options.dangerWithinMeters] — max distance (m) to treat as danger, default 1.15
  * @returns {null | { id: string, displayLabel: string, distanceM: number, arMessage: string, className: string }}
  */
-export function pickCloseThreat(detections) {
+export function pickCloseThreat(detections, options = {}) {
+  const cap =
+    typeof options.dangerWithinMeters === 'number' && options.dangerWithinMeters > 0
+      ? options.dangerWithinMeters
+      : DANGER_WITHIN_DEFAULT_M;
+
   if (!Array.isArray(detections) || detections.length === 0) {
     return null;
   }
@@ -45,7 +52,7 @@ export function pickCloseThreat(detections) {
     const d = detections[i];
     if ((d.confidence || 0) < MIN_CONFIDENCE) continue;
     const dist = effectiveDistanceMeters(d);
-    if (dist == null || dist > DANGER_WITHIN_METERS) continue;
+    if (dist == null || dist > cap) continue;
 
     const className = classKey(d.name);
     if (!best || dist < best.distanceM) {
