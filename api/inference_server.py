@@ -20,18 +20,27 @@ from pfe.phase3 import config
 
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
+from PIL import Image, ImageOps
 from ultralytics import YOLO
 import uvicorn
 
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
 
-_DEFAULT_COCO = os.environ.get("COCO_YOLO_MODEL", "yolov8n.pt")
-# Prioritize our best.pt model
-MODEL_PATH = os.path.normpath(os.path.join("C:/Users/admin/Downloads", "best.pt"))
-CONF = float(os.environ.get("YOLO_CONF", "0.25"))
+_DEFAULT_COCO = "yolov8n.pt"
+# Chemin poids : config par défaut, ou YOLO_WEIGHTS=yolov8n.pt pour COCO 80 classes
+# si ton best.pt ne voit qu’une « person » (jeu de données d’entraînement).
+_w = (os.environ.get("YOLO_WEIGHTS") or "").strip()
+MODEL_PATH = _w if _w else "yolov8n.pt" # Force Nano for speed unless ENV specified
+_mp = Path(MODEL_PATH)
+if not _mp.is_absolute() and not MODEL_PATH.endswith(".pt"):
+    MODEL_PATH = str(_PROJECT_ROOT / _mp)
+
+CONF = float(os.environ.get("YOLO_CONF", "0.2"))
+YOLO_IOU = float(os.environ.get("YOLO_IOU", str(config.YOLO_IOU)))
+YOLO_MAX_DET = int(os.environ.get("YOLO_MAX_DET", "40"))
+YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", str(config.IMG_SIZE)))
 PORT = int(os.environ.get("PORT", "8787"))
-HFOV_DEG = float(os.environ.get("CAMERA_HORIZONTAL_FOV_DEG", str(config.CAMERA_VFOV)))
+HFOV_DEG = float(os.environ.get("CAMERA_HORIZONTAL_FOV_DEG", "56.0")) # iPhone 14 Pro Portrait
 
 app = FastAPI(title="VisionAid YOLO Inference", version="1.0.0")
 app.add_middleware(
@@ -46,7 +55,10 @@ model: YOLO | None = None
 @app.on_event("startup")
 def load_model():
     global model
-    print(f"Loading YOLO from {MODEL_PATH}...")
+    print(
+        f"Loading YOLO from {MODEL_PATH} "
+        f"(conf={CONF}, iou={YOLO_IOU}, imgsz={YOLO_IMGSZ}, max_det={YOLO_MAX_DET})..."
+    )
     model = YOLO(MODEL_PATH)
 
 @app.get("/")
@@ -63,8 +75,10 @@ def health() -> dict[str, Any]:
     return {
         "ok": model is not None,
         "model_path": MODEL_PATH,
+        "yolo_conf": CONF,
+        "yolo_imgsz": YOLO_IMGSZ,
         "horizontal_fov_deg": HFOV_DEG,
-        "engine": "PFE-Phase3-Hybrid"
+        "engine": "PFE-Phase3-Hybrid",
     }
 
 @app.post("/predict")
@@ -72,9 +86,17 @@ async def predict(file: UploadFile = File(...)) -> dict[str, Any]:
     t0 = time.perf_counter()
     content = await file.read()
     img = Image.open(io.BytesIO(content)).convert("RGB")
+    img = ImageOps.exif_transpose(img) # Fix iPhone portrait rotation
     w, h = img.size
 
-    results = model.predict(img, conf=CONF, verbose=False)[0]
+    results = model.predict(
+        img,
+        conf=CONF,
+        iou=YOLO_IOU,
+        imgsz=YOLO_IMGSZ,
+        max_det=YOLO_MAX_DET,
+        verbose=False,
+    )[0]
     yolo_ms = (time.perf_counter() - t0) * 1000.0
 
     detections: list[dict[str, Any]] = []
@@ -87,7 +109,7 @@ async def predict(file: UploadFile = File(...)) -> dict[str, Any]:
         conf = float(box.conf[0])
         name = names_map.get(cls_id, str(cls_id))
         
-        # Use our high-precision depth logic
+        # Use corrected depth model (now uses both height AND width)
         dist_m, depth_method = estimate_distance_m(x1, y1, x2, y2, w, h, name, HFOV_DEG)
         
         detections.append({
@@ -101,10 +123,11 @@ async def predict(file: UploadFile = File(...)) -> dict[str, Any]:
             "depth_method": depth_method,
         })
 
-    # Scene Analysis (BLIP-Large)
-    t_scene = time.perf_counter()
-    scene_list = scene_top5_cached(img)
-    scene_ms = (time.perf_counter() - t_scene) * 1000.0
+    # Scene Analysis (BLIP-Large) — désactivable pour perf (ENABLE_SCENE=0)
+    if os.environ.get("ENABLE_SCENE", "1").strip().lower() in ("0", "false", "no", "off"):
+        scene_list = None
+    else:
+        scene_list = scene_top5_cached(img)
 
     # Gemini (Optional translation)
     t_g = time.perf_counter()
