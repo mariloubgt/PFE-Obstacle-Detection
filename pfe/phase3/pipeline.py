@@ -136,8 +136,18 @@ def run_pipeline(source=None, weights=None, show=True, save_output=False):
                 class_name = class_names.get(cls_id, f"cls_{cls_id}")
 
                 # ── 3. Depth estimation ─────────────────────
-                bbox_h = y2 - y1
-                distance_m = estimate_distance(class_name, int(bbox_h), h)
+                distance_m = estimate_distance(
+                    class_name,
+                    float(x1),
+                    float(y1),
+                    float(x2),
+                    float(y2),
+                    w,
+                    h,
+                    horizontal_fov_deg=getattr(
+                        config, "CAMERA_HORIZONTAL_FOV_DEG", 56.0
+                    ),
+                )
                 danger = get_danger_level(distance_m) if distance_m else "INFO"
                 
                 # Get track ID if available

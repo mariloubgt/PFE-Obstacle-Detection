@@ -50,8 +50,18 @@ def test_single_image(image_path: str, weights: str = None):
         cls_id = int(box.cls[0])
         class_name = class_names.get(cls_id, f"cls_{cls_id}")
         bbox_h = y2 - y1
+        ih, iw = img.shape[:2]
 
-        distance_m = estimate_distance(class_name, int(bbox_h), img.shape[0])
+        distance_m = estimate_distance(
+            class_name,
+            float(x1),
+            float(y1),
+            float(x2),
+            float(y2),
+            iw,
+            ih,
+            horizontal_fov_deg=getattr(config, "CAMERA_HORIZONTAL_FOV_DEG", 56.0),
+        )
         danger = get_danger_level(distance_m) if distance_m else "INFO"
 
         print(f"  [{i+1}] {class_name} ({conf:.0%})")

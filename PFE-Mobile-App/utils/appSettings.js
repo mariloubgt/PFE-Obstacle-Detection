@@ -7,6 +7,8 @@ import {
   LOW_LIGHT_KEY,
   PRIMARY_LANG_KEY,
   INTERNET_GEMINI_KEY,
+  CAMERA_HFOV_DEG_KEY,
+  DEPTH_SCALE_KEY,
 } from '../constants/storageKeys';
 
 export const DEFAULTS = {
@@ -17,6 +19,10 @@ export const DEFAULTS = {
   lowLight: true,
   primaryLang: 'dz',
   internetGemini: false,
+  /** Rear camera horizontal FOV (degrees); tune if distances are systematically wrong */
+  cameraHfovDeg: 56,
+  /** Multiply server distance (0.5–2). If app reads too far, try 0.85; too close, 1.15 */
+  depthScale: 1.0,
 };
 
 function parseBool(v, d) {
@@ -172,6 +178,44 @@ export async function saveInternetGemini(b) {
   return x;
 }
 
+export async function loadCameraHfovDeg() {
+  try {
+    const v = await AsyncStorage.getItem(CAMERA_HFOV_DEG_KEY);
+    return parseNum(v, DEFAULTS.cameraHfovDeg, 40, 95);
+  } catch {
+    return DEFAULTS.cameraHfovDeg;
+  }
+}
+
+export async function saveCameraHfovDeg(deg) {
+  const x = parseNum(String(deg), DEFAULTS.cameraHfovDeg, 40, 95);
+  try {
+    await AsyncStorage.setItem(CAMERA_HFOV_DEG_KEY, String(x));
+  } catch {
+    /* ignore */
+  }
+  return x;
+}
+
+export async function loadDepthScale() {
+  try {
+    const v = await AsyncStorage.getItem(DEPTH_SCALE_KEY);
+    return parseNum(v, DEFAULTS.depthScale, 0.5, 2.0);
+  } catch {
+    return DEFAULTS.depthScale;
+  }
+}
+
+export async function saveDepthScale(s) {
+  const x = parseNum(String(s), DEFAULTS.depthScale, 0.5, 2.0);
+  try {
+    await AsyncStorage.setItem(DEPTH_SCALE_KEY, String(x));
+  } catch {
+    /* ignore */
+  }
+  return x;
+}
+
 /** Batch-load for the live / inference screen. */
 export async function loadAppPreferences() {
   const [
@@ -182,6 +226,8 @@ export async function loadAppPreferences() {
     lowLight,
     primaryLang,
     internetGemini,
+    cameraHfovDeg,
+    depthScale,
   ] = await Promise.all([
     loadSpeechRate(),
     loadVibrationDanger(),
@@ -190,6 +236,8 @@ export async function loadAppPreferences() {
     loadLowLight(),
     loadPrimaryLang(),
     loadInternetGemini(),
+    loadCameraHfovDeg(),
+    loadDepthScale(),
   ]);
   return {
     speechRate,
@@ -199,5 +247,7 @@ export async function loadAppPreferences() {
     lowLight,
     primaryLang,
     internetGemini,
+    cameraHfovDeg,
+    depthScale,
   };
 }

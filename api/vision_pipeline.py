@@ -54,13 +54,20 @@ def estimate_distance_m(
     image_w_px: int,
     image_h_px: int,
     class_name: str,
-    fov_deg: float, # Ignored in new model for stability
+    fov_deg: float,
 ) -> tuple[float, str]:
-    """
-    REDO FROM ZERO : Utilise le nouveau modèle proportionnel stable.
-    """
-    dist = estimate_distance(class_name, x1_px, y1_px, x2_px, y2_px, image_w_px, image_h_px)
-    return dist, "proportional_stable_v1"
+    """Pinhole depth from horizontal FOV + typical object size (height / width fusion)."""
+    dist = estimate_distance(
+        class_name,
+        x1_px,
+        y1_px,
+        x2_px,
+        y2_px,
+        image_w_px,
+        image_h_px,
+        horizontal_fov_deg=fov_deg,
+    )
+    return dist, "pinhole_hfov_v2"
 
 
 # ── Scene Recognition (BLIP-Large) ───────────────────────────────────────
@@ -126,6 +133,35 @@ Guidelines:
 - Max 10 words."""
 
 
+def _build_detailed_description_prompt(
+    detections: list[dict[str, Any]],
+    scene_desc: str,
+) -> str:
+    """Build a detailed environment description prompt for Gemini."""
+    objects_text = ""
+    for d in detections[:10]:
+        objects_text += f"- {d['name']} at {d['distance_m']}m\n"
+
+    return f"""Context: Navigating a blind person in Algeria.
+Scene description: {scene_desc}
+Nearby objects:
+{objects_text}
+
+Task: Describe the entire environment in detail.
+Respond ONLY with this JSON:
+{{
+  "darija": "<detailed description of the scene in Algerian Darija, Latin script, max 40 words>",
+  "risk": "<danger | caution | ok>",
+  "focus": "<most critical object name>"
+}}
+
+Guidelines:
+- Describe the layout, main objects, and general atmosphere.
+- Use ONLY Algerian Darija in LATIN script (phonetics).
+- NO ARABIC SCRIPT.
+- Max 40 words."""
+
+
 def _call_gemini_with_timeout(
     client,
     pil_rgb: Image.Image,
@@ -161,6 +197,7 @@ def run_gemini(
     detections: list[dict[str, Any]],
     scene_top: list[dict[str, Any]] | None,
     fov_deg: float,
+    detailed: bool = False,
 ) -> dict[str, Any]:
     """
     Call Gemini with the actual image + detections.
@@ -176,7 +213,11 @@ def run_gemini(
         return {"text": None, "darija": None, "risk": None, "focus": None, "error": "Missing GEMINI_API_KEY"}
 
     scene_desc = scene_top[0]["label"] if scene_top else "unknown scene"
-    prompt = _build_structured_prompt(detections, scene_desc)
+    
+    if detailed:
+        prompt = _build_detailed_description_prompt(detections, scene_desc)
+    else:
+        prompt = _build_structured_prompt(detections, scene_desc)
 
     try:
         response = _call_gemini_with_timeout(client, pil_rgb, prompt)
@@ -208,3 +249,92 @@ def run_gemini(
         return {"text": raw, "darija": raw or None, "risk": "unknown", "focus": None, "error": f"JSON parse error: {e}"}
     except Exception as e:
         return {"text": None, "darija": None, "risk": None, "focus": None, "error": str(e)}
+
+
+def run_voice_query(
+    pil_rgb: Image.Image,
+    audio_bytes: bytes,
+    audio_mime: str,
+    detections: list[dict[str, Any]],
+    scene_top: list[dict[dict, Any]] | None,
+) -> dict[str, Any]:
+    """
+    Call Gemini with Image + Audio + Detections context.
+    Returns structured JSON: {darija, risk, focus, text, error}.
+    """
+    enabled = os.environ.get("ENABLE_GEMINI", "1").strip().lower() in ("1", "true", "yes", "on")
+    if not config.ENABLE_GEMINI or not enabled:
+        return {"text": None, "darija": None, "risk": None, "focus": None, "error": "Gemini disabled."}
+
+    client = _get_gemini_client()
+    if client is None:
+        return {"text": None, "darija": None, "risk": None, "focus": None, "error": "Missing GEMINI_API_KEY"}
+
+    scene_desc = scene_top[0]["label"] if scene_top else "unknown scene"
+    objects_text = ""
+    for d in detections[:8]:
+        objects_text += f"- {d['name']} at {d['distance_m']}m\n"
+
+    prompt = f"""Context: Navigating a blind person in Algeria.
+Scene description: {scene_desc}
+Nearby objects:
+{objects_text}
+
+Task: Listen to the user's voice message (in Darija or English) and answer their question based on the image.
+Respond ONLY with this JSON:
+{{
+  "darija": "<your helpful answer in Algerian Darija, Latin script, max 40 words>",
+  "risk": "<danger | caution | ok>",
+  "focus": "<most critical object name>",
+  "user_said": "<transcription of what the user said in the audio>"
+}}
+
+Guidelines:
+- If they ask to 'describe the environment' (e.g. 'wash kayen qodami', 'describe environment'), give a detailed description.
+- Use ONLY Algerian Darija in LATIN script (phonetics).
+- NO ARABIC SCRIPT.
+- Max 40 words."""
+
+    from google.genai import types
+    import io
+
+    # Image Part
+    buf = io.BytesIO()
+    pil_rgb.save(buf, format="JPEG", quality=75)
+    img_part = types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
+
+    # Audio Part
+    audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime)
+
+    # Text Part
+    text_part = types.Part.from_text(text=prompt)
+
+    try:
+        def _call():
+            return client.models.generate_content(
+                model=config.GEMINI_TTS_MODEL,
+                contents=[types.Content(role="user", parts=[img_part, audio_part, text_part])],
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_call)
+            response = future.result(timeout=15) # Audio takes longer
+
+        raw_text = (response.text or "").strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+
+        parsed = json.loads(raw_text)
+        return {
+            "darija": parsed.get("darija"),
+            "risk":   parsed.get("risk", "ok"),
+            "focus":  parsed.get("focus"),
+            "user_said": parsed.get("user_said"),
+            "text":   raw_text,
+            "error":  None,
+        }
+    except Exception as e:
+        return {"text": None, "darija": f"Error: {e}", "error": str(e)}

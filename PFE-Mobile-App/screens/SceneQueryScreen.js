@@ -13,9 +13,10 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CameraView } from 'expo-camera';
 import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
-import { querySceneFromTextAsync, transcribeRecordingAsync } from '../services/sceneQueryApi';
+import { querySceneFromAudioAsync } from '../services/sceneQueryApi';
 
 const WELCOME_AR =
   'مرحبا! اسأل بالدارجة على البيئة اللي فيها — نقدر نجاوبك على وصف المشهد قدامك.';
@@ -97,6 +98,7 @@ export default function SceneQueryScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef(null);
   const recordingRef = useRef(null);
+  const cameraRef = useRef(null);
   const [messages, setMessages] = useState(() => [
     { id: nextId(), role: 'assistant', text: WELCOME_AR, time: formatTime() },
   ]);
@@ -179,21 +181,34 @@ export default function SceneQueryScreen({ navigation }) {
       await startRecording();
       return;
     }
-    const uri = await stopRecording();
-    if (!uri) return;
+    
+    // Stop recording and get audio URI
+    const audioUri = await stopRecording();
+    if (!audioUri) return;
 
     setIsTyping(true);
     try {
-      const stt = await transcribeRecordingAsync(uri);
-      if (!stt.text?.trim()) {
-        return;
+      // 1. Take a picture right now to see the environment
+      let photoUri = null;
+      if (cameraRef.current) {
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.3,
+          skipProcessing: true,
+        });
+        photoUri = photo.uri;
       }
-      appendMessage({ id: nextId(), role: 'user', text: stt.text.trim() });
 
-      const answer = await querySceneFromTextAsync(stt.text);
+      // 2. Call our new multimodal endpoint
+      const answer = await querySceneFromAudioAsync(photoUri, audioUri);
+      
+      if (answer.userSaid) {
+        appendMessage({ id: nextId(), role: 'user', text: answer.userSaid });
+      }
+      
       appendMessage({ id: nextId(), role: 'assistant', text: answer.text });
       speakReply(answer.text);
     } catch (e) {
+      console.error(e);
       appendMessage({
         id: nextId(),
         role: 'assistant',
@@ -235,6 +250,15 @@ export default function SceneQueryScreen({ navigation }) {
         <View style={styles.geminiPill}>
           <Text style={styles.geminiPillText}>Gemini AI</Text>
         </View>
+      </View>
+
+      <View style={styles.cameraContainer}>
+        <CameraView
+          ref={cameraRef}
+          style={styles.cameraPreview}
+          facing="back"
+          mode="picture"
+        />
       </View>
 
       <ScrollView
@@ -514,4 +538,15 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.en.semibold,
   },
   pressed: { opacity: 0.9 },
+  cameraContainer: {
+    height: 120,
+    width: '100%',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 10,
+    backgroundColor: '#000',
+  },
+  cameraPreview: {
+    flex: 1,
+  },
 });

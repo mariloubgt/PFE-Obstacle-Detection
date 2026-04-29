@@ -7,3 +7,5 @@ export const AI_FRAME_MS_KEY = '@visionaid_ai_frame_ms';
 export const LOW_LIGHT_KEY = '@visionaid_low_light';
 export const PRIMARY_LANG_KEY = '@visionaid_primary_lang';
 export const INTERNET_GEMINI_KEY = '@visionaid_internet_gemini';
+export const CAMERA_HFOV_DEG_KEY = '@visionaid_camera_hfov_deg';
+export const DEPTH_SCALE_KEY = '@visionaid_depth_scale';

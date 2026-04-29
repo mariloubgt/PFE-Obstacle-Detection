@@ -14,11 +14,13 @@
     },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.pfemobileapp",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "This app uses the microphone for Daridja voice questions in Scene Query.",
+        "NSMicrophoneUsageDescription": "Allow the microphone for optional hands-free commands (e.g. describe environment).",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "NSSpeechRecognitionUsageDescription": "Allow speech recognition to detect hands-free commands on the navigation screen."
       }
     },
     "android": {
@@ -27,7 +29,14 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.anonymous.PFEMobileApp"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -45,6 +54,13 @@
         "expo-sensors",
         {
           "motionPermission": "Motion is used to detect a shake so we can repeat the close-obstacle warning."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow the microphone for optional hands-free commands (e.g. describe environment).",
+          "speechRecognitionPermission": "Allow speech recognition to detect hands-free commands on the navigation screen."
         }
       ]
     ]

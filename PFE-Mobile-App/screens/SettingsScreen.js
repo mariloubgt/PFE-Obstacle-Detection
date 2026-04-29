@@ -36,6 +36,10 @@ import {
   loadPrimaryLang,
   loadInternetGemini,
   saveInternetGemini,
+  loadCameraHfovDeg,
+  saveCameraHfovDeg,
+  loadDepthScale,
+  saveDepthScale,
 } from '../utils/appSettings';
 
 const SPEECH_OPTIONS = [
@@ -149,6 +153,10 @@ export default function SettingsScreen({ navigation }) {
   const [lowLight, setLowLight] = useState(true);
   const [lang, setLang] = useState('dz');
   const [gem, setGem] = useState(false);
+  const [hfovDeg, setHfovDeg] = useState(56);
+  const [hfovOpen, setHfovOpen] = useState(false);
+  const [depthScale, setDepthScale] = useState(1);
+  const [depthOpen, setDepthOpen] = useState(false);
 
   const loadAll = useCallback(async () => {
     setApiUrl(await loadInferenceApiUrl());
@@ -160,6 +168,8 @@ export default function SettingsScreen({ navigation }) {
     setLowLight(await loadLowLight());
     setLang(await loadPrimaryLang());
     setGem(await loadInternetGemini());
+    setHfovDeg(await loadCameraHfovDeg());
+    setDepthScale(await loadDepthScale());
   }, []);
 
   useEffect(() => {
@@ -322,6 +332,27 @@ export default function SettingsScreen({ navigation }) {
             </Pressable>
           </View>
           {testMsg ? <Text style={styles.testMsg}>{testMsg}</Text> : null}
+          <Text style={[styles.serverHint, { marginTop: 14 }]}>
+            Distance tuning: if the app always says obstacles are farther than reality, increase{' '}
+            <Text style={styles.mono}>Camera HFOV</Text> slightly or lower{' '}
+            <Text style={styles.mono}>Distance scale</Text>. If too close, do the opposite.
+          </Text>
+          <View style={[styles.card, { marginTop: 10 }]}>
+            <ValueRow
+              title="Camera horizontal FOV"
+              subtitle="Degrees — typical phone 52–72"
+              value={`${Math.round(hfovDeg)}°`}
+              onPress={() => setHfovOpen(true)}
+            />
+            <InsetDivider />
+            <ValueRow
+              title="Distance scale"
+              subtitle="Multiply depth (0.5–2). Default 1.0"
+              value={`${depthScale.toFixed(2)}×`}
+              onPress={() => setDepthOpen(true)}
+              last
+            />
+          </View>
         </View>
 
         <View style={styles.card}>
@@ -433,6 +464,67 @@ export default function SettingsScreen({ navigation }) {
                 ) : null}
               </Pressable>
             ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={hfovOpen} transparent animationType="fade" onRequestClose={() => setHfovOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setHfovOpen(false)}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Camera horizontal FOV</Text>
+            <Text style={styles.modalHint}>
+              Sent to the PC for each frame. Wider FOV → farther distance estimates. Current:{' '}
+              {Math.round(hfovDeg)}°
+            </Text>
+            <Slider
+              style={styles.modalSlider}
+              minimumValue={40}
+              maximumValue={95}
+              step={1}
+              value={hfovDeg}
+              onValueChange={setHfovDeg}
+              onSlidingComplete={async (v) => setHfovDeg(await saveCameraHfovDeg(v))}
+              minimumTrackTintColor={COLORS.teal}
+              maximumTrackTintColor={COLORS.borderMuted}
+              thumbTintColor={COLORS.teal}
+            />
+            <View style={styles.modalEnds}>
+              <Text style={styles.endLabel}>40°</Text>
+              <Text style={styles.endLabel}>95°</Text>
+            </View>
+            <Pressable style={styles.modalDone} onPress={() => setHfovOpen(false)}>
+              <Text style={styles.modalDoneText}>Done</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={depthOpen} transparent animationType="fade" onRequestClose={() => setDepthOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setDepthOpen(false)}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Distance scale</Text>
+            <Text style={styles.modalHint}>
+              Applied on the server to every detection. Current: {depthScale.toFixed(2)}×
+            </Text>
+            <Slider
+              style={styles.modalSlider}
+              minimumValue={0.5}
+              maximumValue={2}
+              step={0.05}
+              value={depthScale}
+              onValueChange={setDepthScale}
+              onSlidingComplete={async (v) => setDepthScale(await saveDepthScale(v))}
+              minimumTrackTintColor={COLORS.teal}
+              maximumTrackTintColor={COLORS.borderMuted}
+              thumbTintColor={COLORS.teal}
+            />
+            <View style={styles.modalEnds}>
+              <Text style={styles.endLabel}>0.5×</Text>
+              <Text style={styles.endLabel}>2×</Text>
+            </View>
+            <Pressable style={styles.modalDone} onPress={() => setDepthOpen(false)}>
+              <Text style={styles.modalDoneText}>Done</Text>
+            </Pressable>
           </View>
         </Pressable>
       </Modal>
