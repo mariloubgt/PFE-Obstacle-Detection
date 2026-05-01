@@ -24,8 +24,11 @@ export async function querySceneFromAudioAsync(imageUri, audioUri) {
 
   if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
   const data = await resp.json();
+  if (data?.error) {
+    throw new Error(data.error);
+  }
   return {
-    text: data.answer || 'No answer',
+    text: data.answer || data.error || 'No answer',
     userSaid: data.user_said,
   };
 }

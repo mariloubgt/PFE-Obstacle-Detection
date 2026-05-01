@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ExpoCamera from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
@@ -27,8 +27,13 @@ import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
 import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
-import { loadAppPreferences } from '../utils/appSettings';
+import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
+import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { useDescribeEnvironmentHotword } from '../hooks/useDescribeEnvironmentHotword';
+
+const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
+const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back', front: 'front' };
+const FLASH_MODE = ExpoCamera.Camera?.Constants?.FlashMode || ExpoCamera.Constants?.FlashMode || { torch: 'torch', off: 'off' };
 
 /** Natural English phrases for obstacle TTS (with article where it reads well). */
 const ENGLISH_SPEECH_LABEL = {
@@ -117,9 +122,20 @@ function formatMeters(m) {
 export default function MainNavigationScreen({ navigation }) {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, setPermission] = useState(null);
+  const requestPermission = useCallback(async () => {
+    const req =
+      ExpoCamera.requestCameraPermissionsAsync ||
+      ExpoCamera.requestPermissionsAsync ||
+      ExpoCamera.Camera?.requestCameraPermissionsAsync ||
+      ExpoCamera.Camera?.requestPermissionsAsync;
+    if (!req) return;
+    const res = await req();
+    setPermission(res);
+    return res;
+  }, []);
   const cameraRef = useRef(null);
-  const [facing, setFacing] = useState('back');
+  const [facing, setFacing] = useState(CAMERA_TYPE.back);
   const [torch, setTorch] = useState(false);
   const [tapFlash, setTapFlash] = useState(false);
 
@@ -135,8 +151,20 @@ export default function MainNavigationScreen({ navigation }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [alertVolume, setAlertVolume] = useState(0.8);
   const [dangerPayload, setDangerPayload] = useState(null);
-  /** Hands-free: say "describe environment" on main screen (dev build + permissions). */
-  const [listenCommands, setListenCommands] = useState(false);
+  const [volumeHardwareAction, setVolumeHardwareAction] = useState(
+    DEFAULTS.volumeHardwareAction
+  );
+  const [handsFreeDescribe, setHandsFreeDescribe] = useState(DEFAULTS.handsFreeDescribe);
+
+  useEffect(() => {
+    const get =
+      ExpoCamera.getCameraPermissionsAsync ||
+      ExpoCamera.getPermissionsAsync ||
+      ExpoCamera.Camera?.getCameraPermissionsAsync ||
+      ExpoCamera.Camera?.getPermissionsAsync;
+    if (!get) return;
+    void get().then(setPermission).catch(() => {});
+  }, []);
 
   const inFlightRef = useRef(false);
   const aiTestRef = useRef(false);
@@ -162,6 +190,8 @@ export default function MainNavigationScreen({ navigation }) {
         depthScale: p.depthScale,
         useGemini: p.internetGemini,
       };
+      setVolumeHardwareAction(p.volumeHardwareAction);
+      setHandsFreeDescribe(p.handsFreeDescribe);
     });
   }, []);
 
@@ -219,17 +249,17 @@ export default function MainNavigationScreen({ navigation }) {
     if (inFlightRef.current) return;
 
     const po = predictOptsRef.current;
-    if (!po.useGemini) {
-      Speech.stop();
-      Speech.speak('Enable Internet and Gemini in Settings for environment description.', {
-        language: 'en-US',
-        rate: 0.92,
-      });
-      return;
-    }
 
     inFlightRef.current = true;
     try {
+      Speech.stop();
+      Speech.speak('Describing.', {
+        language: 'en-US',
+        rate: 0.92,
+        ...(Platform.OS === 'ios' && {
+          volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
+        }),
+      });
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.28,
         skipProcessing: true,
@@ -242,7 +272,12 @@ export default function MainNavigationScreen({ navigation }) {
       });
       const darija = typeof data?.gemini?.darija === 'string' ? data.gemini.darija.trim() : '';
       const gemErr = data?.gemini?.error;
+      const sceneFallback =
+        typeof data?.scene?.top5?.[0]?.label === 'string'
+          ? data.scene.top5[0].label.trim()
+          : '';
       const toSpeak = darija
+        || sceneFallback
         || (gemErr ? `Could not describe the scene. ${gemErr}` : 'No description available.');
       Speech.stop();
       const isArabic = /[\u0600-\u06FF]/.test(toSpeak);
@@ -259,13 +294,42 @@ export default function MainNavigationScreen({ navigation }) {
     }
   }, []);
 
+  useVolumeHardwareShortcut(navigation, {
+    enabled: !volumeOpen,
+    action: volumeHardwareAction,
+    onDescribeEnvironment: onDescribeEnvironmentCommand,
+  });
+
   useDescribeEnvironmentHotword({
-    enabled: listenCommands,
-    isFocused,
+    enabled: handsFreeDescribe && !volumeOpen && !aiTestEnabled,
+    cameraRef,
+    alertVolumeRef,
     onPhraseMatched: onDescribeEnvironmentCommand,
   });
 
-  /** TTS: English — scene from Gemini `focus` or ImageNet label; obstacle in plain English. */
+  /** Spoken cue when toggling hands-free from Settings — avoid first mount */
+  const announceHandsFreeInitialized = useRef(false);
+  useEffect(() => {
+    if (!announceHandsFreeInitialized.current) {
+      announceHandsFreeInitialized.current = true;
+      return;
+    }
+    Speech.stop();
+    Speech.speak(
+      handsFreeDescribe
+        ? 'Hands-free phrase listening enabled.'
+        : 'Hands-free phrase listening disabled.',
+      {
+        language: 'en-US',
+        rate: 0.92,
+        ...(Platform.OS === 'ios' && {
+          volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
+        }),
+      }
+    );
+  }, [handsFreeDescribe]);
+
+  /** TTS: English obstacle line; prefers server `navigation.guidance_en` (LLaVA) when present. */
   const speakEnglishNav = useCallback((data, smoothedDets) => {
     if (!smoothedDets.length) return;
     const now = Date.now();
@@ -280,24 +344,19 @@ export default function MainNavigationScreen({ navigation }) {
       label.charAt(0).toUpperCase() + label.slice(1);
     const unit = dist === 1 ? 'meter' : 'meters';
 
-    const focus =
-      typeof data?.gemini?.focus === 'string' && data.gemini.focus.trim()
-        ? data.gemini.focus.trim()
-        : null;
-    const sceneLabel =
-      typeof data?.scene?.top5?.[0]?.label === 'string' &&
-      data.scene.top5[0].label.trim()
-        ? data.scene.top5[0].label.trim()
-        : null;
-    const sceneRaw = focus || sceneLabel;
-    const sceneEnglish = clipSceneForSpeech(sceneRaw);
-
     const obstaclePart = `${labelSent} at ${dist} ${unit}.`;
-    const msg = obstaclePart;
+
+    const navGuidance =
+      typeof data?.navigation?.guidance_en === 'string'
+        ? data.navigation.guidance_en.trim()
+        : '';
+    const msg = navGuidance
+      ? clipSceneForSpeech(navGuidance)
+      : obstaclePart;
 
     if (now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS) return;
 
-    const obKey = `${label}|${dist}`;
+    const obKey = navGuidance ? `nav|${msg}` : `${label}|${dist}`;
     if (obKey === lastTtsKeyRef.current) return;
     
     lastTtsKeyRef.current = obKey;
@@ -323,7 +382,11 @@ export default function MainNavigationScreen({ navigation }) {
   }, []);
 
   const toggleFacing = useCallback(() => {
-    setFacing((prev) => (prev === 'back' ? 'front' : 'back'));
+    setFacing((prev) =>
+      prev === CAMERA_TYPE.back
+        ? CAMERA_TYPE.front
+        : CAMERA_TYPE.back
+    );
     setTorch(false);
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -443,26 +506,34 @@ export default function MainNavigationScreen({ navigation }) {
           <Pressable 
             style={[styles.aiPill, aiTestEnabled && styles.aiPillOn]} 
             onPress={() => setAiTestEnabled(!aiTestEnabled)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: aiTestEnabled }}
+            accessibilityLabel={
+              aiTestEnabled ? 'AI obstacle test enabled' : 'AI obstacle test disabled — tap to enable'
+            }
+            accessibilityHint={
+              aiTestEnabled
+                ? 'Turns off automatic obstacle inference on the camera.'
+                : 'Turns on YOLO detection and periodic spoken distances.'
+            }
           >
             <MaterialCommunityIcons name="brain" size={15} color={aiTestEnabled ? COLORS.btnText : COLORS.teal} />
             <Text style={[styles.aiPillText, aiTestEnabled && styles.aiPillTextOn]}>AI test</Text>
           </Pressable>
           <Pressable
-            style={[styles.aiPill, listenCommands && styles.aiPillOn]}
-            onPress={() => setListenCommands(!listenCommands)}
+            style={styles.aiPill}
+            onPress={() => {
+              if (Platform.OS !== 'web') {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+              }
+              void onDescribeEnvironmentCommand();
+            }}
             accessibilityRole="button"
-            accessibilityLabel={
-              listenCommands
-                ? 'Stop listening for describe environment'
-                : 'Listen for describe environment command'
-            }
+            accessibilityLabel="Describe environment scene summary"
+            accessibilityHint="Optional. Prefer volume shortcut in Settings Accessibility, or say describe environment for hands-free"
           >
-            <MaterialCommunityIcons
-              name="microphone-message"
-              size={15}
-              color={listenCommands ? COLORS.btnText : COLORS.teal}
-            />
-            <Text style={[styles.aiPillText, listenCommands && styles.aiPillTextOn]}>Voice</Text>
+            <MaterialCommunityIcons name="microphone-outline" size={15} color={COLORS.teal} />
+            <Text style={styles.aiPillText}>Describe</Text>
           </Pressable>
         </View>
       </View>
@@ -470,11 +541,15 @@ export default function MainNavigationScreen({ navigation }) {
       {/* VISION AREA — flip / torch restored for front camera */}
       <View style={styles.visionArea}>
         <Pressable style={styles.cameraTouchable} onPress={onCameraTap}>
-          <CameraView
+          <CameraComponent
             ref={cameraRef}
             style={StyleSheet.absoluteFill}
-            facing={facing}
-            enableTorch={facing === 'back' && torch}
+            type={facing}
+            flashMode={
+              facing === CAMERA_TYPE.back && torch
+                ? FLASH_MODE.torch
+                : FLASH_MODE.off
+            }
             mode="picture"
           />
           <DetectionOverlay detections={detections} />
@@ -493,8 +568,8 @@ export default function MainNavigationScreen({ navigation }) {
         <Pressable
           style={styles.torchBtn}
           onPress={() => {
-            if (facing !== 'back') {
-              setFacing('back');
+            if (facing !== CAMERA_TYPE.back) {
+              setFacing(CAMERA_TYPE.back);
             }
             setTorch((t) => !t);
             if (Platform.OS !== 'web') {
@@ -559,12 +634,10 @@ export default function MainNavigationScreen({ navigation }) {
           ) : (
             <>
               <Text style={styles.alertTitle}>AI System Idle</Text>
-              <Text style={styles.alertSub}>Enable "AI Test" to start detection</Text>
-              {listenCommands ? (
-                <Text style={styles.voiceHint}>
-                  Voice is on — say &quot;describe environment&quot; (English) for a spoken scene summary. Use a development build after installing native speech support.
-                </Text>
-              ) : null}
+              <Text style={styles.alertSub}>
+                Accessibility: Physical volume shortcut and hands-free phrase are in Settings. Tap
+                Describe only if preferred.
+              </Text>
             </>
           )}
         </View>
@@ -572,16 +645,34 @@ export default function MainNavigationScreen({ navigation }) {
 
       {/* BOTTOM NAV */}
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 15) }]}>
-        <Pressable style={styles.navItem} onPress={() => setVolumeOpen(true)}>
+        <Pressable
+          style={styles.navItem}
+          onPress={() => setVolumeOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Adjust spoken alert loudness"
+          accessibilityHint="Opens a volume slider"
+        >
           <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
           <Text style={styles.navLabel}>Volume</Text>
         </Pressable>
 
-        <Pressable style={styles.centerFab} onPress={() => navigation.navigate('SceneQuery')}>
+        <Pressable
+          style={styles.centerFab}
+          onPress={() => navigation.navigate('SceneQuery')}
+          accessibilityRole="button"
+          accessibilityLabel="Voice scene queries"
+          accessibilityHint="Opens ask about the scene"
+        >
           <MaterialCommunityIcons name="chart-box-outline" size={30} color={COLORS.btnText} />
         </Pressable>
 
-        <Pressable style={styles.navItem} onPress={() => navigation.navigate('Settings')}>
+        <Pressable
+          style={styles.navItem}
+          onPress={() => navigation.navigate('Settings')}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          accessibilityHint="Shortcuts for volume keys describe and hands-free phrase"
+        >
           <MaterialCommunityIcons name="cog-outline" size={26} color={COLORS.tealBright} />
           <Text style={styles.navLabel}>Settings</Text>
         </Pressable>

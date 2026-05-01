@@ -3,6 +3,7 @@
     "name": "PFE-Mobile-App",
     "slug": "PFE-Mobile-App",
     "version": "1.0.0",
+    "jsEngine": "jsc",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,6 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
+      "deploymentTarget": "15.1",
       "bundleIdentifier": "com.anonymous.pfemobileapp",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Allow the microphone for optional hands-free commands (e.g. describe environment).",
@@ -49,7 +51,6 @@
           "microphonePermission": "This app uses the microphone for voice commands."
         }
       ],
-      "expo-font",
       [
         "expo-sensors",
         {
@@ -59,8 +60,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Allow the microphone for optional hands-free commands (e.g. describe environment).",
-          "speechRecognitionPermission": "Allow speech recognition to detect hands-free commands on the navigation screen."
+          "microphonePermission": "Microphone access lets the app detect the phrase describe environment.",
+          "speechRecognitionPermission": "Speech recognition enables hands-free scene description commands."
         }
       ]
     ]

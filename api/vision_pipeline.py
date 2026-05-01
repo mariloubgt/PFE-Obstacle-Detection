@@ -72,13 +72,23 @@ def estimate_distance_m(
 
 # ── Scene Recognition (BLIP-Large) ───────────────────────────────────────
 _blip_analyzer: SceneAnalyzer | None = None
+_blip_disabled_reason: str | None = None
 
 def scene_top5_cached(pil_rgb: Image.Image) -> list[dict[str, Any]] | None:
     """Uses BLIP-Large to provide a descriptive scene caption."""
-    global _blip_analyzer
+    global _blip_analyzer, _blip_disabled_reason
+    if _blip_disabled_reason is not None:
+        return None
+
     if _blip_analyzer is None:
-        print("[API] Initialisation de BLIP-Base (Optimisé)...")
-        _blip_analyzer = SceneAnalyzer(interval=0)
+        try:
+            print("[API] Initialisation de BLIP-Base (Optimisé)...")
+            _blip_analyzer = SceneAnalyzer(interval=0)
+        except Exception as e:
+            # Keep API alive even if BLIP dependencies/model loading fail.
+            _blip_disabled_reason = str(e)
+            print(f"[API Scene Disabled] {_blip_disabled_reason}")
+            return None
 
     try:
         # Use the PIL Image directly — BLIP processor expects PIL input

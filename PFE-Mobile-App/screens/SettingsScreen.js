@@ -40,6 +40,11 @@ import {
   saveCameraHfovDeg,
   loadDepthScale,
   saveDepthScale,
+  DEFAULTS,
+  loadVolumeHardwareAction,
+  saveVolumeHardwareAction,
+  loadHandsFreeDescribe,
+  saveHandsFreeDescribe,
 } from '../utils/appSettings';
 
 const SPEECH_OPTIONS = [
@@ -54,6 +59,12 @@ const FRAME_PRESETS = [
   { label: '1.5 fps', ms: 666 },
   { label: '2 fps', ms: 500 },
   { label: '0.33 fps', ms: 3000 },
+];
+
+const VOLUME_HW_OPTIONS = [
+  { value: 'none', label: 'Off' },
+  { value: 'describe', label: 'Describe environment' },
+  { value: 'scene_query', label: 'Voice scene chat' },
 ];
 
 function formatFrameValue(ms) {
@@ -86,6 +97,14 @@ function snapFrameMs(ms) {
     }
   }
   return best;
+}
+
+function volumeHardwareRowLabel(action) {
+  const normalized = ['none', 'describe', 'scene_query'].includes(action)
+    ? action
+    : DEFAULTS.volumeHardwareAction;
+  const hit = VOLUME_HW_OPTIONS.find((o) => o.value === normalized);
+  return hit?.label ?? 'Describe environment';
 }
 
 function InsetDivider() {
@@ -157,6 +176,9 @@ export default function SettingsScreen({ navigation }) {
   const [hfovOpen, setHfovOpen] = useState(false);
   const [depthScale, setDepthScale] = useState(1);
   const [depthOpen, setDepthOpen] = useState(false);
+  const [volumeHw, setVolumeHw] = useState(DEFAULTS.volumeHardwareAction);
+  const [volumeHwOpen, setVolumeHwOpen] = useState(false);
+  const [handsFreePhrase, setHandsFreePhrase] = useState(DEFAULTS.handsFreeDescribe);
 
   const loadAll = useCallback(async () => {
     setApiUrl(await loadInferenceApiUrl());
@@ -170,6 +192,8 @@ export default function SettingsScreen({ navigation }) {
     setGem(await loadInternetGemini());
     setHfovDeg(await loadCameraHfovDeg());
     setDepthScale(await loadDepthScale());
+    setVolumeHw(await loadVolumeHardwareAction());
+    setHandsFreePhrase(await loadHandsFreeDescribe());
   }, []);
 
   useEffect(() => {
@@ -297,6 +321,23 @@ export default function SettingsScreen({ navigation }) {
           />
         </Section>
 
+        <Section label="Accessibility">
+          <ValueRow
+            title="Physical volume buttons"
+            subtitle="On the live navigation screen: describe, scene chat, or off"
+            value={volumeHardwareRowLabel(volumeHw)}
+            onPress={() => setVolumeHwOpen(true)}
+          />
+          <InsetDivider />
+          <ToggleRow
+            title="Hands-free phrase"
+            subtitle="Say describe environment — requires mic; may briefly pause preview"
+            value={handsFreePhrase}
+            onValueChange={async (b) => setHandsFreePhrase(await saveHandsFreeDescribe(b))}
+            last
+          />
+        </Section>
+
         <View style={styles.serverSection}>
           <Text style={styles.serverTitle}>Phase 3 — AI server (PC)</Text>
           <Text style={styles.serverHint}>
@@ -367,9 +408,10 @@ export default function SettingsScreen({ navigation }) {
         </View>
 
         <Text style={styles.hint}>
-          Use the volume control on the live screen for quick alert loudness. “Internet for Gemini”
-          uses your server when the PC allows it; turn off to skip cloud enrichment on the model
-          request.
+          On the navigation screen, use Physical volume buttons (above) instead of locating the Describe
+          control. Hands-free listens for describe environment — turn off if preview should never pause.
+          Use the Volume control below for obstacle alert loudness. “Internet for Gemini” uses your
+          server when the PC allows cloud enrichment on the inference request.
         </Text>
       </ScrollView>
 
@@ -525,6 +567,38 @@ export default function SettingsScreen({ navigation }) {
             <Pressable style={styles.modalDone} onPress={() => setDepthOpen(false)}>
               <Text style={styles.modalDoneText}>Done</Text>
             </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={volumeHwOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setVolumeHwOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setVolumeHwOpen(false)}>
+          <View style={styles.pickerCard}>
+            <Text style={styles.modalTitle}>Physical volume buttons</Text>
+            <Text style={styles.modalHint}>When you are on the live navigation camera screen</Text>
+            {VOLUME_HW_OPTIONS.map((o) => (
+              <Pressable
+                key={o.value}
+                style={({ pressed }) => [styles.pickerRow, pressed && styles.pressed]}
+                onPress={async () => {
+                  const v = await saveVolumeHardwareAction(o.value);
+                  setVolumeHw(v);
+                  setVolumeHwOpen(false);
+                }}
+              >
+                <Text style={[styles.pickerLabel, o.value === volumeHw && styles.pickerLabelOn]}>
+                  {o.label}
+                </Text>
+                {o.value === volumeHw ? (
+                  <MaterialCommunityIcons name="check" size={22} color={COLORS.teal} />
+                ) : null}
+              </Pressable>
+            ))}
           </View>
         </Pressable>
       </Modal>

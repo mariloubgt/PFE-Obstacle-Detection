@@ -25,6 +25,7 @@ from ultralytics import YOLO
 import uvicorn
 
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
+from api.llava_navigation import run_llava_navigation_if_enabled
 
 _DEFAULT_COCO = "yolov8n.pt"
 # Chemin poids : config par défaut, ou YOLO_WEIGHTS=yolov8n.pt pour COCO 80 classes
@@ -163,7 +164,6 @@ async def predict(
         scene_list = scene_top5_cached(img)
 
     # Gemini (Optional translation)
-    t_g = time.perf_counter()
     if str(use_gemini).strip().lower() in ("0", "false", "no", "off"):
         gem = {
             "text": None,
@@ -174,13 +174,15 @@ async def predict(
         }
     else:
         gem = run_gemini(img, detections, scene_list, req_hfov, detailed=is_detailed)
-    gemini_ms = (time.perf_counter() - t_g) * 1000.0
+
+    navigation = run_llava_navigation_if_enabled(img, detections, w, h, scene_list)
 
     return {
         "detections": detections,
         "inference_ms": round(yolo_ms, 2),
         "scene": {"top5": scene_list},
         "gemini": gem,
+        "navigation": navigation,
         "pipeline_ms": round((time.perf_counter() - t0) * 1000.0, 2)
     }
 

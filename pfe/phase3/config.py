@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 # --- GEMINI (RÉACTIVÉ ET PRIORITAIRE) ---
-ENABLE_GEMINI = False 
+ENABLE_GEMINI = os.getenv("ENABLE_GEMINI", "1").strip().lower() in ("1", "true", "yes", "on")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # --- YOLO CONFIG ---

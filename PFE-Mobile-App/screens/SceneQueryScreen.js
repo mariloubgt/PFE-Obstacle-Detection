@@ -13,10 +13,13 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CameraView } from 'expo-camera';
+import * as ExpoCamera from 'expo-camera';
 import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { querySceneFromAudioAsync } from '../services/sceneQueryApi';
+
+const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
+const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back' };
 
 const WELCOME_AR =
   'مرحبا! اسأل بالدارجة على البيئة اللي فيها — نقدر نجاوبك على وصف المشهد قدامك.';
@@ -253,10 +256,10 @@ export default function SceneQueryScreen({ navigation }) {
       </View>
 
       <View style={styles.cameraContainer}>
-        <CameraView
+        <CameraComponent
           ref={cameraRef}
           style={styles.cameraPreview}
-          facing="back"
+          type={CAMERA_TYPE.back}
           mode="picture"
         />
       </View>

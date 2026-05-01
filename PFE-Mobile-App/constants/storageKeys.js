@@ -9,3 +9,5 @@ export const PRIMARY_LANG_KEY = '@visionaid_primary_lang';
 export const INTERNET_GEMINI_KEY = '@visionaid_internet_gemini';
 export const CAMERA_HFOV_DEG_KEY = '@visionaid_camera_hfov_deg';
 export const DEPTH_SCALE_KEY = '@visionaid_depth_scale';
+export const VOLUME_HARDWARE_ACTION_KEY = '@visionaid_volume_hardware_action';
+export const HANDS_FREE_DESCRIBE_KEY = '@visionaid_hands_free_describe';

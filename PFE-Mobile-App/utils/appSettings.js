@@ -9,6 +9,8 @@ import {
   INTERNET_GEMINI_KEY,
   CAMERA_HFOV_DEG_KEY,
   DEPTH_SCALE_KEY,
+  VOLUME_HARDWARE_ACTION_KEY,
+  HANDS_FREE_DESCRIBE_KEY,
 } from '../constants/storageKeys';
 
 export const DEFAULTS = {
@@ -21,8 +23,15 @@ export const DEFAULTS = {
   internetGemini: false,
   /** Rear camera horizontal FOV (degrees); tune if distances are systematically wrong */
   cameraHfovDeg: 56,
-  /** Multiply server distance (0.5–2). If app reads too far, try 0.85; too close, 1.15 */
+  /** multiply server distance (0.5–2). If app reads too far, try 0.85; too close, 1.15 */
   depthScale: 1.0,
+  /**
+   * Physical volume keys: 'describe' = spoken scene summary, 'scene_query' = voice Q&A screen, 'none' = off
+   * @type {'none'|'describe'|'scene_query'}
+   */
+  volumeHardwareAction: 'describe',
+  /** When true, listen for the phrase "describe environment" on the nav screen (uses speech recognition + may pause camera briefly). */
+  handsFreeDescribe: false,
 };
 
 function parseBool(v, d) {
@@ -216,6 +225,51 @@ export async function saveDepthScale(s) {
   return x;
 }
 
+/** @returns {'none'|'describe'|'scene_query'} */
+function normalizeVolumeHardwareAction(raw) {
+  if (raw === 'none' || raw === 'describe' || raw === 'scene_query') return raw;
+  return DEFAULTS.volumeHardwareAction;
+}
+
+export async function loadVolumeHardwareAction() {
+  try {
+    const v = await AsyncStorage.getItem(VOLUME_HARDWARE_ACTION_KEY);
+    return normalizeVolumeHardwareAction(v);
+  } catch {
+    return DEFAULTS.volumeHardwareAction;
+  }
+}
+
+/** @param {string} action 'none' | 'describe' | 'scene_query' */
+export async function saveVolumeHardwareAction(action) {
+  const x = normalizeVolumeHardwareAction(String(action));
+  try {
+    await AsyncStorage.setItem(VOLUME_HARDWARE_ACTION_KEY, x);
+  } catch {
+    /* ignore */
+  }
+  return x;
+}
+
+export async function loadHandsFreeDescribe() {
+  try {
+    const v = await AsyncStorage.getItem(HANDS_FREE_DESCRIBE_KEY);
+    return parseBool(v, DEFAULTS.handsFreeDescribe);
+  } catch {
+    return DEFAULTS.handsFreeDescribe;
+  }
+}
+
+export async function saveHandsFreeDescribe(b) {
+  const x = Boolean(b);
+  try {
+    await AsyncStorage.setItem(HANDS_FREE_DESCRIBE_KEY, x ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+  return x;
+}
+
 /** Batch-load for the live / inference screen. */
 export async function loadAppPreferences() {
   const [
@@ -228,6 +282,8 @@ export async function loadAppPreferences() {
     internetGemini,
     cameraHfovDeg,
     depthScale,
+    volumeHardwareAction,
+    handsFreeDescribe,
   ] = await Promise.all([
     loadSpeechRate(),
     loadVibrationDanger(),
@@ -238,6 +294,8 @@ export async function loadAppPreferences() {
     loadInternetGemini(),
     loadCameraHfovDeg(),
     loadDepthScale(),
+    loadVolumeHardwareAction(),
+    loadHandsFreeDescribe(),
   ]);
   return {
     speechRate,
@@ -249,5 +307,7 @@ export async function loadAppPreferences() {
     internetGemini,
     cameraHfovDeg,
     depthScale,
+    volumeHardwareAction,
+    handsFreeDescribe,
   };
 }

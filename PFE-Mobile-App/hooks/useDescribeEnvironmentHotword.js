@@ -1,207 +1,261 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import * as Speech from 'expo-speech';
-import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from 'expo-speech-recognition';
+import { useIsFocused } from '@react-navigation/native';
 
-const PHRASE_RE = /describe\s+(the\s+)?environment/;
-const COOLDOWN_MS = 9000;
-const RESTART_DELAY_MS = 500;
+const PHRASE_COOLDOWN_MS = 4500;
+const RESTART_AFTER_DESCRIBE_MS = 5200;
 
-function normalizeTranscript(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function matchesDescribeEnvironment(text) {
-  if (!text) return false;
-  const n = normalizeTranscript(text);
-  if (PHRASE_RE.test(n)) return true;
-  if (n.includes('describe') && n.includes('environment')) return true;
-  return false;
-}
-
-async function waitUntilNotSpeaking(maxMs = 90000) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < maxMs) {
-    try {
-      const speaking = await Speech.isSpeakingAsync();
-      if (!speaking) return;
-    } catch {
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 280));
+/**
+ * Load expo-speech-recognition lazily — top-level import throws if native ExpoSpeechRecognition
+ * is missing (Expo Go, or dev client built before pods). Must not crash the bundle.
+ */
+function tryLoadSpeechRecognitionNative() {
+  try {
+    // eslint-disable-next-line global-require
+    return require('expo-speech-recognition');
+  } catch {
+    return null;
   }
 }
 
+function matchesPhrase(text) {
+  const n = String(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /\bdescribe\b/.test(n) && /\benvironment\b/.test(n);
+}
+
 /**
- * Continuous speech recognition (when supported) for the phrase "describe environment".
- * On Android 12 and below, restarts after each `end` event.
+ * Hands-free "describe … environment" → fires callback once per cooldown.
+ * Pauses camera preview while recognition runs; resumes when recognition stops / after describe.
  *
- * @param {object} p
- * @param {boolean} p.enabled User toggle — must be true to listen.
- * @param {boolean} p.isFocused Screen focused — pauses when false.
- * @param {() => Promise<void>} p.onPhraseMatched Fire after a match; typically capture frame + API + TTS.
+ * Disabled on web. No-op if native module is unavailable (rebuild dev client with pods).
  */
-export function useDescribeEnvironmentHotword({ enabled, isFocused, onPhraseMatched }) {
-  const onPhraseMatchedRef = useRef(onPhraseMatched);
-  const enabledRef = useRef(enabled);
-  const isFocusedRef = useRef(isFocused);
-  const lastFireRef = useRef(0);
-  const pausedRef = useRef(false);
-  const inFlightRef = useRef(false);
-  const restartTimerRef = useRef(null);
-
+export function useDescribeEnvironmentHotword({
+  enabled,
+  cameraRef,
+  alertVolumeRef,
+  onPhraseMatched,
+}) {
+  const isFocused = useIsFocused();
+  const onMatchedRef = useRef(onPhraseMatched);
   useEffect(() => {
-    onPhraseMatchedRef.current = onPhraseMatched;
+    onMatchedRef.current = onPhraseMatched;
   }, [onPhraseMatched]);
-  useEffect(() => {
-    enabledRef.current = enabled;
-  }, [enabled]);
-  useEffect(() => {
-    isFocusedRef.current = isFocused;
-  }, [isFocused]);
-
-  const androidApi = Platform.OS === 'android' ? Platform.Version : 100;
-  const preferContinuous = Platform.OS === 'ios' || androidApi >= 33;
-
-  const clearRestartTimer = () => {
-    if (restartTimerRef.current) {
-      clearTimeout(restartTimerRef.current);
-      restartTimerRef.current = null;
-    }
-  };
-
-  const startRecognition = useCallback(() => {
-    if (Platform.OS === 'web') return;
-    if (!enabledRef.current || !isFocusedRef.current || pausedRef.current) return;
-    try {
-      ExpoSpeechRecognitionModule.start({
-        lang: 'en-US',
-        interimResults: true,
-        continuous: preferContinuous,
-        contextualStrings: ['describe environment', 'describe the environment'],
-        iosVoiceProcessingEnabled: true,
-      });
-    } catch {
-      restartTimerRef.current = setTimeout(() => {
-        restartTimerRef.current = null;
-        if (enabledRef.current && isFocusedRef.current && !pausedRef.current) {
-          try {
-            ExpoSpeechRecognitionModule.start({
-              lang: 'en-US',
-              interimResults: true,
-              continuous: preferContinuous,
-              contextualStrings: ['describe environment', 'describe the environment'],
-              iosVoiceProcessingEnabled: true,
-            });
-          } catch {
-            // still failing — e.g. Expo Go
-          }
-        }
-      }, RESTART_DELAY_MS * 3);
-    }
-  }, [preferContinuous]);
-
-  const stopRecognition = useCallback(() => {
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useSpeechRecognitionEvent('result', (ev) => {
-    if (!enabledRef.current || pausedRef.current || !isFocusedRef.current) return;
-    const transcripts = (ev.results || []).map((r) => r.transcript).filter(Boolean);
-    const combined = transcripts.join(' ');
-    if (!matchesDescribeEnvironment(combined)) return;
-    const now = Date.now();
-    if (now - lastFireRef.current < COOLDOWN_MS) return;
-    if (inFlightRef.current) return;
-
-    lastFireRef.current = now;
-    inFlightRef.current = true;
-    pausedRef.current = true;
-    clearRestartTimer();
-    stopRecognition();
-
-    void (async () => {
-      try {
-        await onPhraseMatchedRef.current?.();
-      } catch (e) {
-        console.warn('[DescribeEnvironmentHotword]', e);
-      } finally {
-        inFlightRef.current = false;
-        try {
-          await waitUntilNotSpeaking();
-        } catch {
-          // ignore
-        }
-        pausedRef.current = false;
-        if (enabledRef.current && isFocusedRef.current) {
-          startRecognition();
-        }
-      }
-    })();
-  });
-
-  const scheduleRestart = useCallback(() => {
-    clearRestartTimer();
-    if (!enabledRef.current || !isFocusedRef.current || pausedRef.current) return;
-    restartTimerRef.current = setTimeout(() => {
-      restartTimerRef.current = null;
-      if (enabledRef.current && isFocusedRef.current && !pausedRef.current) {
-        startRecognition();
-      }
-    }, RESTART_DELAY_MS);
-  }, [startRecognition]);
-
-  useSpeechRecognitionEvent('error', () => {
-    if (!enabledRef.current || !isFocusedRef.current || pausedRef.current) return;
-    scheduleRestart();
-  });
-
-  useSpeechRecognitionEvent('end', () => {
-    if (!enabledRef.current || !isFocusedRef.current || pausedRef.current) return;
-    if (preferContinuous) return;
-    scheduleRestart();
-  });
 
   useEffect(() => {
-    if (Platform.OS === 'web') {
+    /** Do not require native STT unless the feature is active (avoids crashing / errors in Expo Go). */
+    if (!enabled || !isFocused || Platform.OS === 'web') {
       return undefined;
     }
 
-    if (!enabled || !isFocused) {
-      clearRestartTimer();
-      stopRecognition();
-      pausedRef.current = false;
+    const speechApi = tryLoadSpeechRecognitionNative();
+    if (!speechApi) {
+      return undefined;
+    }
+
+    const { ExpoSpeechRecognitionModule, addSpeechRecognitionListener } = speechApi;
+
+    if (
+      !ExpoSpeechRecognitionModule?.start ||
+      typeof addSpeechRecognitionListener !== 'function'
+    ) {
       return undefined;
     }
 
     let cancelled = false;
-    void (async () => {
+    /** @type {ReturnType<typeof setTimeout>[] } */
+    const timers = [];
+    /** @type {Array<{ remove: () => void }>} */
+    const subs = [];
+    let lastFireAt = 0;
+    /** listening session active (waiting for transcripts) */
+    let sessionActive = false;
+
+    const volOpts = () => {
+      const v = alertVolumeRef?.current ?? 0.85;
+      return Platform.OS === 'ios'
+        ? { volume: Math.min(1, Math.max(0.15, v)) }
+        : {};
+    };
+
+    const resumePreviewSafely = () => {
       try {
-        const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-        if (cancelled || !enabledRef.current || !isFocusedRef.current) return;
-        if (!perm.granted) return;
+        cameraRef.current?.resumePreview?.();
       } catch {
+        /* ignore */
+      }
+    };
+
+    const pausePreviewSafely = () => {
+      try {
+        cameraRef.current?.pausePreview?.();
+      } catch {
+        /* ignore */
+      }
+    };
+
+    async function bootstrap() {
+      if (
+        cancelled ||
+        !enabled ||
+        !isFocused ||
+        Platform.OS === 'web' ||
+        !ExpoSpeechRecognitionModule?.start ||
+        typeof ExpoSpeechRecognitionModule.requestPermissionsAsync !== 'function'
+      ) {
         return;
       }
+
+      let p =
+        ExpoSpeechRecognitionModule.getPermissionsAsync &&
+        (await ExpoSpeechRecognitionModule.getPermissionsAsync());
+
+      if (p?.status !== 'granted') {
+        p = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      }
+
+      if (cancelled || p?.status !== 'granted') return;
+
+      const startRecognition = () => {
+        if (
+          cancelled ||
+          !enabled ||
+          !isFocused ||
+          !ExpoSpeechRecognitionModule?.start
+        )
+          return;
+        sessionActive = true;
+        Speech.stop();
+        pausePreviewSafely();
+        Speech.speak('Listening. Say describe environment.', {
+          language: 'en-US',
+          rate: 0.92,
+          ...volOpts(),
+        });
+
+        const delayMs = Platform.OS === 'ios' ? 1700 : 900;
+        const startTimer = setTimeout(() => {
+          if (cancelled || !sessionActive) return;
+          ExpoSpeechRecognitionModule.start({
+            lang: 'en-US',
+            interimResults: true,
+            contextualStrings: ['describe environment'],
+            continuous: Platform.OS !== 'ios',
+          });
+        }, delayMs);
+        timers.push(startTimer);
+      };
+
+      subs.push(
+        addSpeechRecognitionListener('result', (ev) => {
+          if (!sessionActive || cancelled) return;
+          const results = ev?.results || [];
+          const text = results.map((r) => r.transcript).join(' ');
+          if (!matchesPhrase(text)) return;
+
+          const now = Date.now();
+          if (now - lastFireAt < PHRASE_COOLDOWN_MS) return;
+          lastFireAt = now;
+
+          sessionActive = false;
+          Speech.stop();
+
+          try {
+            ExpoSpeechRecognitionModule.abort();
+          } catch {
+            try {
+              ExpoSpeechRecognitionModule.stop();
+            } catch {
+              /* ignore */
+            }
+          }
+
+          resumePreviewSafely();
+
+          const fn = onMatchedRef.current;
+          Promise.resolve(fn && fn())
+            .catch(() => {})
+            .finally(() => {
+              if (cancelled) return;
+              const t = setTimeout(() => {
+                startRecognition();
+              }, RESTART_AFTER_DESCRIBE_MS);
+              timers.push(t);
+            });
+        })
+      );
+
+      subs.push(
+        addSpeechRecognitionListener('error', (e) => {
+          if (e?.error === 'aborted') return;
+
+          sessionActive = false;
+          resumePreviewSafely();
+
+          if (e?.error !== 'no-speech' && e?.error !== 'speech-timeout') {
+            Speech.stop();
+            Speech.speak('Speech recognition paused. Try again shortly.', {
+              language: 'en-US',
+              rate: 0.92,
+              ...volOpts(),
+            });
+          }
+
+          if (
+            !cancelled &&
+            enabled &&
+            isFocused &&
+            e?.error !== 'no-speech' &&
+            e?.error !== 'speech-timeout'
+          ) {
+            timers.push(setTimeout(() => startRecognition(), 2600));
+          }
+        })
+      );
+
+      subs.push(
+        addSpeechRecognitionListener('end', () => {
+          sessionActive = false;
+          resumePreviewSafely();
+          if (!cancelled && enabled && isFocused && Platform.OS === 'ios')
+            timers.push(setTimeout(() => startRecognition(), 900));
+        })
+      );
+
       startRecognition();
-    })();
+    }
+
+    if (enabled && isFocused && Platform.OS !== 'web') {
+      void bootstrap();
+    }
 
     return () => {
       cancelled = true;
-      clearRestartTimer();
-      stopRecognition();
-      pausedRef.current = false;
+      sessionActive = false;
+      timers.forEach(clearTimeout);
+      subs.forEach((s) => {
+        try {
+          s.remove();
+        } catch {
+          /* ignore */
+        }
+      });
+
+      Speech.stop();
+      try {
+        ExpoSpeechRecognitionModule.abort();
+      } catch {
+        try {
+          ExpoSpeechRecognitionModule.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      resumePreviewSafely();
     };
-  }, [enabled, isFocused, startRecognition, stopRecognition]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, isFocused]);
 }
