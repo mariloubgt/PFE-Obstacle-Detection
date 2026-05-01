@@ -1,7 +1,7 @@
 """
 Phase 3 — mobile inference API backend.
-Integrated with PFE Phase 3 logic (BLIP-Large + Trig Depth).
-Includes Gemini multimodal vision support.
+Integrated with PFE Phase 3 logic (Gemini Vision scene caption + Trig Depth).
+Includes Gemini multimodal vision for navigation context.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import json
 import concurrent.futures
 from pathlib import Path
 from typing import Any
-import torch
 from PIL import Image
 
 # Import our optimized PFE modules
@@ -21,7 +20,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from pfe.phase3.depth_estimator import estimate_distance
-from pfe.phase3.scene_analyzer import SceneAnalyzer
+from pfe.phase3.gemini_scene_caption import gemini_caption_image
 from pfe.phase3 import config
 
 # ── Singleton Gemini client (created once, reused every request) ──────────
@@ -70,40 +69,18 @@ def estimate_distance_m(
     return dist, "pinhole_hfov_v2"
 
 
-# ── Scene Recognition (BLIP-Large) ───────────────────────────────────────
-_blip_analyzer: SceneAnalyzer | None = None
-_blip_disabled_reason: str | None = None
+# ── Scene caption (Gemini Vision) ─────────────────────────────────────────
 
 def scene_top5_cached(pil_rgb: Image.Image) -> list[dict[str, Any]] | None:
-    """Uses BLIP-Large to provide a descriptive scene caption."""
-    global _blip_analyzer, _blip_disabled_reason
-    if _blip_disabled_reason is not None:
+    """One English scene sentence from Gemini Vision (same shape as legacy BLIP top-1)."""
+    client = _get_gemini_client()
+    if client is None:
         return None
 
-    if _blip_analyzer is None:
-        try:
-            print("[API] Initialisation de BLIP-Base (Optimisé)...")
-            _blip_analyzer = SceneAnalyzer(interval=0)
-        except Exception as e:
-            # Keep API alive even if BLIP dependencies/model loading fail.
-            _blip_disabled_reason = str(e)
-            print(f"[API Scene Disabled] {_blip_disabled_reason}")
-            return None
-
-    try:
-        # Use the PIL Image directly — BLIP processor expects PIL input
-        inputs = _blip_analyzer.processor(pil_rgb, return_tensors="pt").to(_blip_analyzer.device)
-        out = _blip_analyzer.model.generate(
-            **inputs,
-            max_new_tokens=40,
-            min_length=10,
-            num_beams=1 # Plus rapide
-        )
-        caption = _blip_analyzer.processor.decode(out[0], skip_special_tokens=True)
-        return [{"label": caption, "probability": 1.0}]
-    except Exception as e:
-        print(f"[API Scene Error]: {e}")
+    caption = gemini_caption_image(pil_rgb, client, timeout_s=config.GEMINI_TIMEOUT_S)
+    if not caption:
         return None
+    return [{"label": caption, "probability": 1.0}]
 
 
 # ── Gemini Multimodal Vision ─────────────────────────────────────────────

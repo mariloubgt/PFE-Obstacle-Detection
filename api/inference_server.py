@@ -1,6 +1,6 @@
 """
 VisionAid / YOLO inference API.
-Uses PFE Phase 3 logic (BLIP-Large + Trig Depth).
+Uses PFE Phase 3 logic (Gemini Vision scene + Trig Depth).
 """
 
 from __future__ import annotations
@@ -157,7 +157,7 @@ async def predict(
             "depth_method": depth_method,
         })
 
-    # Scene Analysis (BLIP-Large) — désactivable pour perf (ENABLE_SCENE=0)
+    # Scene caption (Gemini Vision) — désactivable pour perf / offline (ENABLE_SCENE=0)
     if os.environ.get("ENABLE_SCENE", "1").strip().lower() in ("0", "false", "no", "off"):
         scene_list = None
     else:
