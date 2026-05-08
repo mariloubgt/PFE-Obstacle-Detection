@@ -57,9 +57,6 @@ export default function WelcomeScreen({ navigation }) {
         <Text style={styles.taglineEn}>
           Assistive Navigation System for Visually Impaired People
         </Text>
-        <Text style={styles.taglineAr} accessibilityLabel="Arabic tagline">
-          نظام التنقل الذكي بالدارجة
-        </Text>
 
         <View style={styles.cardsBlock}>
           <FeatureCard
@@ -73,7 +70,7 @@ export default function WelcomeScreen({ navigation }) {
             iconName="microphone"
             iconColor="#C084FC"
             iconBg="#4C1D95"
-            title="Daridja voice interaction"
+            title="Voice interaction"
             subtitle="Powered by Gemini AI"
           />
           <FeatureCard
@@ -147,15 +144,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginBottom: 10,
     fontFamily: FONTS.en.medium,
-  },
-  taglineAr: {
-    textAlign: 'center',
-    color: COLORS.tealBright,
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: 28,
-    writingDirection: 'rtl',
-    fontFamily: FONTS.ar.regular,
   },
   cardsBlock: {
     gap: 12,

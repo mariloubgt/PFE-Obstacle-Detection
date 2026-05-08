@@ -34,7 +34,7 @@ function classKey(name) {
 /**
  * @param {object} [options]
  * @param {number} [options.dangerWithinMeters] — max distance (m) to treat as danger, default 1.15
- * @returns {null | { id: string, displayLabel: string, distanceM: number, arMessage: string, className: string }}
+ * @returns {null | { id: string, displayLabel: string, distanceM: number, alertMessage: string, className: string }}
  */
 export function pickCloseThreat(detections, options = {}) {
   const cap =
@@ -63,14 +63,14 @@ export function pickCloseThreat(detections, options = {}) {
             .replace(/_/g, ' ')
             .toUpperCase()
             .slice(0, 18);
-      const arMessage = isPerson
-        ? 'شخص قدامك — وقف وانتبه'
-        : 'عائق قدامك — وقف وانتبه';
+      const alertMessage = isPerson
+        ? 'Person ahead. Stop and be careful.'
+        : 'Obstacle ahead. Stop and be careful.';
       best = {
         id: `${className}-${i}`,
         displayLabel,
         distanceM: dist,
-        arMessage,
+        alertMessage,
         className: d.name || 'object',
       };
     }

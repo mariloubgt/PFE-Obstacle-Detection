@@ -21,8 +21,8 @@ import { querySceneFromAudioAsync } from '../services/sceneQueryApi';
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back' };
 
-const WELCOME_AR =
-  'مرحبا! اسأل بالدارجة على البيئة اللي فيها — نقدر نجاوبك على وصف المشهد قدامك.';
+const WELCOME_MESSAGE =
+  'Hello! Ask about your surroundings and I will describe the scene.';
 
 function nextId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -103,16 +103,15 @@ export default function SceneQueryScreen({ navigation }) {
   const recordingRef = useRef(null);
   const cameraRef = useRef(null);
   const [messages, setMessages] = useState(() => [
-    { id: nextId(), role: 'assistant', text: WELCOME_AR, time: formatTime() },
+    { id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() },
   ]);
   const [isListening, setIsListening] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
 
   const speakReply = useCallback((text) => {
     Speech.stop();
-    const isArabic = /[\u0600-\u06FF]/.test(text);
     Speech.speak(text, {
-      language: isArabic ? 'ar-SA' : 'en-US',
+      language: 'en-US',
       rate: 0.92,
     });
   }, []);
@@ -132,7 +131,7 @@ export default function SceneQueryScreen({ navigation }) {
     try {
       const { status } = await Audio.requestPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Microphone', 'Audio permission is required for Daridja voice input.');
+        Alert.alert('Microphone', 'Audio permission is required for voice input.');
         return;
       }
       await Audio.setAudioModeAsync({
@@ -215,7 +214,7 @@ export default function SceneQueryScreen({ navigation }) {
       appendMessage({
         id: nextId(),
         role: 'assistant',
-        text: 'تعذّر الاتصال بخدمة المشهد. جرّبي لاحقًا.',
+        text: 'Could not reach scene service. Please try again.',
       });
     } finally {
       setIsTyping(false);
@@ -224,7 +223,7 @@ export default function SceneQueryScreen({ navigation }) {
 
   const onEndSession = useCallback(() => {
     Speech.stop();
-    setMessages([{ id: nextId(), role: 'assistant', text: WELCOME_AR, time: formatTime() }]);
+    setMessages([{ id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() }]);
   }, []);
 
   return (
@@ -272,7 +271,6 @@ export default function SceneQueryScreen({ navigation }) {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
       >
         {messages.map((m) => {
-          const isAr = /[\u0600-\u06FF]/.test(m.text);
           return (
             <View
               key={m.id}
@@ -291,9 +289,7 @@ export default function SceneQueryScreen({ navigation }) {
                   style={[
                     styles.bubbleText,
                     m.role === 'user' ? styles.bubbleTextUser : null,
-                    isAr
-                      ? { fontFamily: FONTS.ar.regular, writingDirection: 'rtl' }
-                      : { fontFamily: FONTS.en.regular },
+                    { fontFamily: FONTS.en.regular },
                   ]}
                 >
                   {m.text}
@@ -326,7 +322,7 @@ export default function SceneQueryScreen({ navigation }) {
         <View style={styles.listeningLine}>
           <View style={styles.listeningDot} />
           <Text style={styles.listeningText}>
-            {isListening ? 'Listening in Daridja...' : 'Tap the mic to speak in Daridja'}
+            {isListening ? 'Listening...' : 'Tap the mic to speak'}
           </Text>
         </View>
         <Pressable

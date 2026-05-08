@@ -74,14 +74,14 @@ export default function PermissionsScreen({ navigation }) {
           />
           <PermissionRow
             icon="microphone"
-            title="Voice Commands in Daridja"
+            title="Voice Commands in English"
             description="Speak questions · dictation when available offline."
             value={voiceCmd}
             onValueChange={setVoiceCmd}
           />
           <PermissionRow
             icon="surround-sound"
-            title="Audio Alerts in Daridja"
+            title="Audio Alerts in English"
             description="Spoken warnings · vibration for danger zones."
             value={audioAlerts}
             onValueChange={setAudioAlerts}

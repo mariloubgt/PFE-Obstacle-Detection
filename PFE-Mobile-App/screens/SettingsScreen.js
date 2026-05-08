@@ -33,7 +33,6 @@ import {
   saveAiFrameMs,
   loadLowLight,
   saveLowLight,
-  loadPrimaryLang,
   loadInternetGemini,
   saveInternetGemini,
   loadCameraHfovDeg,
@@ -170,7 +169,6 @@ export default function SettingsScreen({ navigation }) {
   const [frameOpen, setFrameOpen] = useState(false);
   const [vib, setVib] = useState(true);
   const [lowLight, setLowLight] = useState(true);
-  const [lang, setLang] = useState('dz');
   const [gem, setGem] = useState(false);
   const [hfovDeg, setHfovDeg] = useState(56);
   const [hfovOpen, setHfovOpen] = useState(false);
@@ -188,7 +186,6 @@ export default function SettingsScreen({ navigation }) {
     setThr(await loadDangerThresholdM());
     setFrameMs(snapFrameMs(await loadAiFrameMs()));
     setLowLight(await loadLowLight());
-    setLang(await loadPrimaryLang());
     setGem(await loadInternetGemini());
     setHfovDeg(await loadCameraHfovDeg());
     setDepthScale(await loadDepthScale());
@@ -269,7 +266,7 @@ export default function SettingsScreen({ navigation }) {
           <InsetDivider />
           <ValueRow
             title="Speech Rate"
-            subtitle="Daridja TTS speed"
+            subtitle="English TTS speed"
             value={speechLabel}
             onPress={() => setSpeechOpen(true)}
           />
@@ -306,10 +303,10 @@ export default function SettingsScreen({ navigation }) {
           />
         </Section>
 
-        <Section label="Language">
+        <Section label="Voice">
           <ValueRow
-            title="Primary Language"
-            value={lang === 'dz' ? 'دارجة' : 'Français'}
+            title="Speech Language"
+            value="English"
             onPress={() => navigation.navigate('LanguageVoice')}
           />
           <InsetDivider />
@@ -482,7 +479,7 @@ export default function SettingsScreen({ navigation }) {
         <Pressable style={styles.modalBackdrop} onPress={() => setSpeechOpen(false)}>
           <View style={styles.pickerCard}>
             <Text style={styles.modalTitle}>Speech rate</Text>
-            <Text style={styles.modalHint}>Daridja TTS speed</Text>
+            <Text style={styles.modalHint}>English TTS speed</Text>
             {SPEECH_OPTIONS.map((o) => (
               <Pressable
                 key={o.label}

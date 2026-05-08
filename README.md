@@ -67,5 +67,51 @@ VisionAid is an AI-powered co-pilot designed to help visually impaired individua
 
 ---
 
+## MobileNetV2 Scene + Navigation
+
+You can now run an offline `MobileNetV2` transfer-learning pipeline for:
+- **Scene recognition** (top-5 labels),
+- **Navigation action classification** (`go_forward`, `slow_down`, `turn_left`, `turn_right`, `stop` by default).
+
+### 1) Train your checkpoints
+
+Prepare datasets in ImageFolder format:
+- `dataset/scene/train/<class_name>/*.jpg`
+- `dataset/scene/val/<class_name>/*.jpg`
+- `dataset/navigation/train/<class_name>/*.jpg`
+- `dataset/navigation/val/<class_name>/*.jpg`
+
+Train scene model:
+```bash
+python scripts/train_mobilenet_v2.py --data-dir dataset/scene --output models/mbv2_scene.pt --labels-json models/mbv2_scene_labels.json --epochs 10
+```
+
+Train navigation model:
+```bash
+python scripts/train_mobilenet_v2.py --data-dir dataset/navigation --output models/mbv2_nav.pt --labels-json models/mbv2_nav_labels.json --epochs 10
+```
+
+### 2) Enable in API
+
+Set environment variables before starting the server:
+```bash
+set ENABLE_MOBILENET_V2=1
+set MBV2_SCENE_CKPT=models/mbv2_scene.pt
+set MBV2_NAV_CKPT=models/mbv2_nav.pt
+set MBV2_SCENE_LABELS_JSON=models/mbv2_scene_labels.json
+set MBV2_NAV_LABELS_JSON=models/mbv2_nav_labels.json
+```
+
+Then run:
+```bash
+python api/inference_server.py
+```
+
+The `/predict` response now includes:
+- `scene.top5` from MobileNetV2 (fallback to Gemini scene caption if unavailable),
+- `navigation_mobilenet_v2` with predicted navigation action.
+
+---
+
 ## 📜 Credits
 Developed as a PFE (Final Year Project) for obstacle detection and scene understanding using deep learning and multimodal AI.

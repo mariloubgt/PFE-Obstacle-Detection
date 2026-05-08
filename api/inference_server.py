@@ -26,6 +26,7 @@ import uvicorn
 
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
 from api.llava_navigation import run_llava_navigation_if_enabled
+from api.mobilenet_v2_pipeline import MobileNetV2Pipeline
 
 _DEFAULT_COCO = "yolov8n.pt"
 # Chemin poids : config par défaut, ou YOLO_WEIGHTS=yolov8n.pt pour COCO 80 classes
@@ -66,15 +67,17 @@ app.add_middleware(
 )
 
 model: YOLO | None = None
+mobilenet_pipeline: MobileNetV2Pipeline | None = None
 
 @app.on_event("startup")
 def load_model():
-    global model
+    global model, mobilenet_pipeline
     print(
         f"Loading YOLO from {MODEL_PATH} "
         f"(conf={CONF}, iou={YOLO_IOU}, imgsz={YOLO_IMGSZ}, max_det={YOLO_MAX_DET})..."
     )
     model = YOLO(MODEL_PATH)
+    mobilenet_pipeline = MobileNetV2Pipeline()
 
 @app.get("/")
 def root() -> dict[str, Any]:
@@ -95,6 +98,7 @@ def health() -> dict[str, Any]:
         "horizontal_fov_deg": HFOV_DEG,
         "depth_scale_default": DEPTH_SCALE_ENV,
         "engine": "PFE-Phase3-Hybrid",
+        "mobilenet_v2": mobilenet_pipeline.status() if mobilenet_pipeline else {"enabled": False},
     }
 
 @app.post("/predict")
@@ -157,10 +161,13 @@ async def predict(
             "depth_method": depth_method,
         })
 
-    # Scene caption (Gemini Vision) — désactivable pour perf / offline (ENABLE_SCENE=0)
-    if os.environ.get("ENABLE_SCENE", "1").strip().lower() in ("0", "false", "no", "off"):
-        scene_list = None
-    else:
+    # Scene recognition (MobileNetV2 if available, otherwise Gemini caption fallback).
+    scene_list = None
+    nav_mbv2 = {"label": None, "probability": None, "error": "MobileNetV2 disabled."}
+    if mobilenet_pipeline:
+        scene_list = mobilenet_pipeline.scene_top5(img)
+        nav_mbv2 = mobilenet_pipeline.navigation(img, detections)
+    if not scene_list and os.environ.get("ENABLE_SCENE", "1").strip().lower() not in ("0", "false", "no", "off"):
         scene_list = scene_top5_cached(img)
 
     # Gemini (Optional translation)
@@ -181,6 +188,7 @@ async def predict(
         "detections": detections,
         "inference_ms": round(yolo_ms, 2),
         "scene": {"top5": scene_list},
+        "navigation_mobilenet_v2": nav_mbv2,
         "gemini": gem,
         "navigation": navigation,
         "pipeline_ms": round((time.perf_counter() - t0) * 1000.0, 2)

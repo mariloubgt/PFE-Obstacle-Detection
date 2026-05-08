@@ -1,10 +1,5 @@
 import { useFonts } from 'expo-font';
 import {
-  Cairo_400Regular,
-  Cairo_600SemiBold,
-  Cairo_700Bold,
-} from '@expo-google-fonts/cairo';
-import {
   Inter_400Regular,
   Inter_500Medium,
   Inter_600SemiBold,
@@ -19,12 +14,9 @@ export const fontAssets = {
   Inter_600SemiBold,
   Inter_700Bold,
   Inter_800ExtraBold,
-  Cairo_400Regular,
-  Cairo_600SemiBold,
-  Cairo_700Bold,
 };
 
-/** Inter for English & French; Cairo for Arabic (دارجة). */
+/** Inter typography for app UI and speech text. */
 export const FONTS = {
   en: {
     regular: 'Inter_400Regular',
@@ -32,11 +24,6 @@ export const FONTS = {
     semibold: 'Inter_600SemiBold',
     bold: 'Inter_700Bold',
     extrabold: 'Inter_800ExtraBold',
-  },
-  ar: {
-    regular: 'Cairo_400Regular',
-    semibold: 'Cairo_600SemiBold',
-    bold: 'Cairo_700Bold',
   },
 };
 

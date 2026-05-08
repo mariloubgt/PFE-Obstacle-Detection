@@ -23,7 +23,7 @@ const DANGER = {
 const SHAKE_ACCEL = 1.65;
 const SHAKE_COOLDOWN_MS = 1200;
 
-export default function DangerAlertModal({ visible, displayLabel, distanceM, arMessage, onBack }) {
+export default function DangerAlertModal({ visible, displayLabel, distanceM, alertMessage, onBack }) {
   const insets = useSafeAreaInsets();
   const lastShakeAt = useRef(0);
   const lastMagnitude = useRef(0);
@@ -36,11 +36,11 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, arM
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
     Speech.stop();
-    Speech.speak(arMessage, {
-      language: 'ar-SA',
+    Speech.speak(alertMessage, {
+      language: 'en-US',
       rate: 0.95,
     });
-  }, [arMessage]);
+  }, [alertMessage]);
 
   useEffect(() => {
     if (!visible) return;
@@ -98,8 +98,8 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, arM
           <Text style={styles.distUnit}>meters ahead</Text>
         </View>
 
-        <Text style={styles.arLine} accessibilityLabel="Arabic warning">
-          {arMessage}
+        <Text style={styles.alertLine} accessibilityLabel="Warning message">
+          {alertMessage}
         </Text>
 
         <View style={styles.instructionBox}>
@@ -198,14 +198,13 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     marginBottom: 10,
   },
-  arLine: {
+  alertLine: {
     color: DANGER.crimson,
     fontSize: 20,
     lineHeight: 30,
     textAlign: 'center',
     marginBottom: 32,
-    fontFamily: FONTS.ar.regular,
-    writingDirection: 'rtl',
+    fontFamily: FONTS.en.semibold,
   },
   instructionBox: {
     width: '100%',

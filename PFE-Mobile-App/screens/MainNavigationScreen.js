@@ -64,6 +64,19 @@ function englishLabelForClass(name) {
   return `a ${spaced}`;
 }
 
+function formatMobileNavSpeech(label) {
+  const v = String(label || '').trim().toLowerCase();
+  if (!v) return '';
+  const map = {
+    go_forward: 'Path looks clearer. Move forward carefully.',
+    slow_down: 'Slow down. Obstacle ahead.',
+    turn_left: 'Obstacle ahead. Turn left carefully.',
+    turn_right: 'Obstacle ahead. Turn right carefully.',
+    stop: 'Stop now. Obstacle very close.',
+  };
+  return map[v] || `Navigation suggestion: ${v.replace(/_/g, ' ')}.`;
+}
+
 function normClass(name) {
   return String(name || '').toLowerCase().trim();
 }
@@ -280,10 +293,9 @@ export default function MainNavigationScreen({ navigation }) {
         || sceneFallback
         || (gemErr ? `Could not describe the scene. ${gemErr}` : 'No description available.');
       Speech.stop();
-      const isArabic = /[\u0600-\u06FF]/.test(toSpeak);
       const vol = alertVolumeRef.current;
       Speech.speak(toSpeak, {
-        language: isArabic ? 'ar-SA' : 'en-US',
+        language: 'en-US',
         rate: 0.92,
         ...(Platform.OS === 'ios' && {
           volume: Math.min(1, Math.max(0.15, vol)),
@@ -329,7 +341,7 @@ export default function MainNavigationScreen({ navigation }) {
     );
   }, [handsFreeDescribe]);
 
-  /** TTS: English obstacle line; prefers server `navigation.guidance_en` (LLaVA) when present. */
+  /** TTS: English obstacle line; prefers MobileNet nav, then LLaVA guidance, then obstacle fallback. */
   const speakEnglishNav = useCallback((data, smoothedDets) => {
     if (!smoothedDets.length) return;
     const now = Date.now();
@@ -346,17 +358,28 @@ export default function MainNavigationScreen({ navigation }) {
 
     const obstaclePart = `${labelSent} at ${dist} ${unit}.`;
 
+    const mbv2Label =
+      typeof data?.navigation_mobilenet_v2?.label === 'string'
+        ? data.navigation_mobilenet_v2.label.trim()
+        : '';
+    const mbv2Speech = formatMobileNavSpeech(mbv2Label);
     const navGuidance =
       typeof data?.navigation?.guidance_en === 'string'
         ? data.navigation.guidance_en.trim()
         : '';
-    const msg = navGuidance
+    const msg = mbv2Speech
+      ? clipSceneForSpeech(mbv2Speech)
+      : navGuidance
       ? clipSceneForSpeech(navGuidance)
       : obstaclePart;
 
     if (now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS) return;
 
-    const obKey = navGuidance ? `nav|${msg}` : `${label}|${dist}`;
+    const obKey = mbv2Speech
+      ? `mbv2|${mbv2Label}`
+      : navGuidance
+      ? `nav|${msg}`
+      : `${label}|${dist}`;
     if (obKey === lastTtsKeyRef.current) return;
     
     lastTtsKeyRef.current = obKey;
@@ -425,6 +448,8 @@ export default function MainNavigationScreen({ navigation }) {
       setInferenceMs(data.inference_ms ?? null);
       setPipelineMs(data.pipeline_ms ?? null);
       const ctx =
+        (typeof data?.navigation_mobilenet_v2?.label === 'string' &&
+          data.navigation_mobilenet_v2.label.trim()) ||
         (typeof data.gemini?.focus === 'string' && data.gemini.focus.trim()) ||
         (typeof data.scene?.top5?.[0]?.label === 'string' &&
           data.scene.top5[0].label.trim()) ||

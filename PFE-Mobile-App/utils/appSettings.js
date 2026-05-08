@@ -19,7 +19,7 @@ export const DEFAULTS = {
   dangerThresholdM: 0.8,
   aiFrameMs: 1000,
   lowLight: true,
-  primaryLang: 'dz',
+  primaryLang: 'en',
   internetGemini: false,
   /** Rear camera horizontal FOV (degrees); tune if distances are systematically wrong */
   cameraHfovDeg: 56,
@@ -149,17 +149,11 @@ export async function saveLowLight(b) {
 }
 
 export async function loadPrimaryLang() {
-  try {
-    const v = await AsyncStorage.getItem(PRIMARY_LANG_KEY);
-    if (v === 'fr' || v === 'dz') return v;
-    return DEFAULTS.primaryLang;
-  } catch {
-    return DEFAULTS.primaryLang;
-  }
+  return 'en';
 }
 
 export async function savePrimaryLang(lang) {
-  const x = lang === 'fr' ? 'fr' : 'dz';
+  const x = 'en';
   try {
     await AsyncStorage.setItem(PRIMARY_LANG_KEY, x);
   } catch {
