@@ -64,19 +64,6 @@ function englishLabelForClass(name) {
   return `a ${spaced}`;
 }
 
-function formatMobileNavSpeech(label) {
-  const v = String(label || '').trim().toLowerCase();
-  if (!v) return '';
-  const map = {
-    go_forward: 'Path looks clearer. Move forward carefully.',
-    slow_down: 'Slow down. Obstacle ahead.',
-    turn_left: 'Obstacle ahead. Turn left carefully.',
-    turn_right: 'Obstacle ahead. Turn right carefully.',
-    stop: 'Stop now. Obstacle very close.',
-  };
-  return map[v] || `Navigation suggestion: ${v.replace(/_/g, ' ')}.`;
-}
-
 function normClass(name) {
   return String(name || '').toLowerCase().trim();
 }
@@ -114,8 +101,9 @@ function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.45) {
   return lockedDet;
 }
 
-const FRAME_MS = 650;
-const SPEAK_MIN_GAP_MS = 2600;
+const FRAME_MS = 1500;
+const SPEAK_MIN_GAP_MS = 4000;
+const NAV_GROQ_INTERVAL_MS = 4000;
 /** Speak scene/caption again when text changes, at most every this many ms */
 const SCENE_SPEAK_COOLDOWN_MS = 4500;
 const MAX_SCENE_TTS_CHARS = 220;
@@ -181,6 +169,11 @@ export default function MainNavigationScreen({ navigation }) {
 
   const inFlightRef = useRef(false);
   const aiTestRef = useRef(false);
+  const navInFlightRef = useRef(false);
+  const lastNavGroqAtRef = useRef(0);
+  const lastNavTextRef = useRef('');
+  const lastNavSpokenAtRef = useRef(0);
+  const lastEmergencyAtRef = useRef(0);
   const smoothStateRef = useRef({});
   const lastTtsKeyRef = useRef('');
   const lastSpeakAtRef = useRef(0);
@@ -244,16 +237,35 @@ export default function MainNavigationScreen({ navigation }) {
     aiTestRef.current = aiTestEnabled;
   }, [aiTestEnabled]);
 
+  /** Voice command "activate navigation" → enable AI test (which now does navigation too). */
+  const onActivateNavigation = useCallback(() => {
+    if (aiTestRef.current) return;
+    setAiTestEnabled(true);
+    Speech.stop();
+    Speech.speak('Navigation activated.', {
+      language: 'en-US',
+      rate: 0.92,
+      ...(Platform.OS === 'ios' && {
+        volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
+      }),
+    });
+  }, []);
+
+  /** Voice command "stop navigation" → disable AI test. */
+  const onStopNavigation = useCallback(() => {
+    if (!aiTestRef.current) return;
+    setAiTestEnabled(false);
+    Speech.stop();
+    Speech.speak('Navigation stopped.', {
+      language: 'en-US',
+      rate: 0.92,
+      ...(Platform.OS === 'ios' && {
+        volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
+      }),
+    });
+  }, []);
+
   const onDescribeEnvironmentCommand = useCallback(async () => {
-    const api = await loadInferenceApiUrl();
-    if (!api) {
-      Speech.stop();
-      Speech.speak('Set the inference server address in Settings.', {
-        language: 'en-US',
-        rate: 0.92,
-      });
-      return;
-    }
     if (!cameraRef.current) return;
 
     for (let i = 0; i < 40 && inFlightRef.current; i++) {
@@ -277,6 +289,16 @@ export default function MainNavigationScreen({ navigation }) {
         quality: 0.28,
         skipProcessing: true,
       });
+
+      const api = await loadInferenceApiUrl();
+      if (!api) {
+        Speech.stop();
+        Speech.speak('Set the inference server address in Settings.', {
+          language: 'en-US',
+          rate: 0.92,
+        });
+        return;
+      }
       const data = await predictImage(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
@@ -316,10 +338,12 @@ export default function MainNavigationScreen({ navigation }) {
   });
 
   useDescribeEnvironmentHotword({
-    enabled: handsFreeDescribe && !volumeOpen && !aiTestEnabled,
+    enabled: handsFreeDescribe && !volumeOpen,
     cameraRef,
     alertVolumeRef,
     onPhraseMatched: onDescribeEnvironmentCommand,
+    onActivateNavigation,
+    onStopNavigation,
   });
 
   /** Spoken cue when toggling hands-free from Settings — avoid first mount */
@@ -344,7 +368,7 @@ export default function MainNavigationScreen({ navigation }) {
     );
   }, [handsFreeDescribe]);
 
-  /** TTS for AI test (obstacles only): MobileNet nav → LLaVA → obstacle phrase. No Groq here. */
+  /** TTS: English obstacle line; prefers LLaVA guidance, then obstacle fallback. */
   const speakEnglishNav = useCallback((data, smoothedDets) => {
     if (!smoothedDets.length) return;
     const now = Date.now();
@@ -359,27 +383,18 @@ export default function MainNavigationScreen({ navigation }) {
     const unit = dist === 1 ? 'meter' : 'meters';
     const obstaclePart = `${labelSent} at ${dist} ${unit}.`;
 
-    const mbv2Label =
-      typeof data?.navigation_mobilenet_v2?.label === 'string'
-        ? data.navigation_mobilenet_v2.label.trim()
-        : '';
-    const mbv2Speech = formatMobileNavSpeech(mbv2Label);
-    const navGuidance =
+    const llavaGuidance =
       typeof data?.navigation?.guidance_en === 'string'
         ? data.navigation.guidance_en.trim()
         : '';
-
-    const msg = mbv2Speech
-      ? clipSceneForSpeech(mbv2Speech)
-      : navGuidance
+    const navGuidance = llavaGuidance;
+    const msg = navGuidance
       ? clipSceneForSpeech(navGuidance)
       : obstaclePart;
 
     if (now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS) return;
 
-    const obKey = mbv2Speech
-      ? `mbv2|${mbv2Label}`
-      : navGuidance
+    const obKey = navGuidance
       ? `nav|${msg}`
       : `${label}|${dist}`;
     if (obKey === lastTtsKeyRef.current) return;
@@ -418,6 +433,82 @@ export default function MainNavigationScreen({ navigation }) {
     }
   }, []);
 
+  /** Emergency stop rule: any close obstacle <1.5m → speak immediately (with 4s cooldown). */
+  const speakEmergencyIfNeeded = useCallback((primaryOnly) => {
+    if (!aiTestRef.current) return false;
+    const closest = primaryOnly[0];
+    if (!closest || typeof closest.distance_m !== 'number') return false;
+    if (closest.distance_m >= 1.5) return false;
+    const now = Date.now();
+    if (now - lastEmergencyAtRef.current < 6000) return false;
+    lastEmergencyAtRef.current = now;
+
+    const dist = Math.max(0.2, Math.round(closest.distance_m * 10) / 10);
+    const label = englishLabelForClass(closest.name);
+    const cx = ((closest.x1 ?? 0) + (closest.x2 ?? 1)) / 2;
+    const side = cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
+    const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
+    Speech.stop();
+    Speech.speak(msg, {
+      language: 'en-US',
+      rate: 0.95,
+      pitch: 1.05,
+      ...(Platform.OS === 'ios' && {
+        volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
+      }),
+    });
+    return true;
+  }, []);
+
+  /** Fire Groq navigate call on its own timer, independent of YOLO loop. */
+  const fireGroqNav = useCallback(async () => {
+    if (!aiTestRef.current) return;
+    if (navInFlightRef.current) return;
+    if (!cameraRef.current) return;
+    navInFlightRef.current = true;
+    try {
+      const api = await loadInferenceApiUrl();
+      if (!api) return;
+      // Take a fresh photo for Groq
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.3,
+        skipProcessing: true,
+      });
+      if (!aiTestRef.current) return;
+      const po = predictOptsRef.current;
+      const data = await predictImage(api, photo.uri, {
+        hfovDeg: po.hfovDeg,
+        depthScale: po.depthScale,
+        useGemini: false,
+        useGroq: true,
+        groqMode: 'navigate',
+      });
+      if (!aiTestRef.current) return;
+      const guidance =
+        typeof data?.groq?.guidance_en === 'string' ? data.groq.guidance_en.trim() : '';
+      if (!guidance) return;
+      const now = Date.now();
+      const isNew = guidance !== lastNavTextRef.current;
+      const tooLongSilent = now - lastNavSpokenAtRef.current > 12000;
+      // Speak if guidance changed OR 12s without speaking
+      if (!isNew && !tooLongSilent) return;
+      lastNavTextRef.current = guidance;
+      lastNavSpokenAtRef.current = now;
+      Speech.stop();
+      Speech.speak(guidance, {
+        language: 'en-US',
+        rate: 0.92,
+        ...(Platform.OS === 'ios' && {
+          volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
+        }),
+      });
+    } catch {
+      // ignore — nav is best-effort
+    } finally {
+      navInFlightRef.current = false;
+    }
+  }, []);
+
   // --- AI Loop (non-overlapping frames + smoothed distances) ---
   const runFrame = useCallback(async () => {
     if (!aiTestRef.current || !cameraRef.current || inFlightRef.current) return;
@@ -433,7 +524,8 @@ export default function MainNavigationScreen({ navigation }) {
       const data = await predictImage(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-        useGemini: po.useGemini,
+        useGemini: false,
+        useGroq: false,
       });
 
       const valid = (data.detections || []).filter((d) => d.distance_m < 5.0);
@@ -450,32 +542,40 @@ export default function MainNavigationScreen({ navigation }) {
       setInferenceMs(data.inference_ms ?? null);
       setPipelineMs(data.pipeline_ms ?? null);
       const ctx =
-        (typeof data?.navigation_mobilenet_v2?.label === 'string' &&
-          data.navigation_mobilenet_v2.label.trim()) ||
         (typeof data.gemini?.focus === 'string' && data.gemini.focus.trim()) ||
         (typeof data.scene?.top5?.[0]?.label === 'string' &&
           data.scene.top5[0].label.trim()) ||
         null;
       setVoiceContextHint(ctx);
       setInferenceError(null);
-      speakEnglishNav(data, primaryOnly);
+
+      speakEmergencyIfNeeded(primaryOnly);
     } catch (e) {
       if (aiTestRef.current) setInferenceError(e.message);
     } finally {
       inFlightRef.current = false;
     }
-  }, [speakEnglishNav]);
+  }, [speakEmergencyIfNeeded]);
 
   useEffect(() => {
-    let interval = null;
+    let yoloInterval = null;
+    let groqInterval = null;
     if (aiTestEnabled) {
       smoothStateRef.current = {};
       lastTtsKeyRef.current = '';
       lastSpokenSceneTextRef.current = '';
       lastSceneSpeakAtRef.current = 0;
       primaryLockRef.current = null;
+      lastNavGroqAtRef.current = 0;
+      lastNavTextRef.current = '';
+      lastNavSpokenAtRef.current = 0;
+      lastEmergencyAtRef.current = 0;
+      // YOLO loop: fast, no Groq
       runFrame();
-      interval = setInterval(runFrame, FRAME_MS);
+      yoloInterval = setInterval(runFrame, FRAME_MS);
+      // Groq nav loop: separate, slower timer
+      setTimeout(() => { void fireGroqNav(); }, 1500); // first call after 1.5s
+      groqInterval = setInterval(() => { void fireGroqNav(); }, NAV_GROQ_INTERVAL_MS);
     } else {
       Speech.stop();
       lastTtsKeyRef.current = '';
@@ -486,9 +586,10 @@ export default function MainNavigationScreen({ navigation }) {
       setInferenceError(null);
     }
     return () => {
-      if (interval) clearInterval(interval);
+      if (yoloInterval) clearInterval(yoloInterval);
+      if (groqInterval) clearInterval(groqInterval);
     };
-  }, [aiTestEnabled, runFrame]);
+  }, [aiTestEnabled, runFrame, fireGroqNav]);
 
   const onDangerBack = useCallback(() => {
     setDangerPayload(null);
@@ -532,16 +633,29 @@ export default function MainNavigationScreen({ navigation }) {
           </View>
           <Pressable 
             style={[styles.aiPill, aiTestEnabled && styles.aiPillOn]} 
-            onPress={() => setAiTestEnabled(!aiTestEnabled)}
+            onPress={() => {
+              const next = !aiTestEnabled;
+              setAiTestEnabled(next);
+              Speech.stop();
+              Speech.speak(next ? 'Navigation activated.' : 'Navigation stopped.', {
+                language: 'en-US',
+                rate: 0.92,
+                ...(Platform.OS === 'ios' && {
+                  volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
+                }),
+              });
+            }}
             accessibilityRole="button"
             accessibilityState={{ selected: aiTestEnabled }}
             accessibilityLabel={
-              aiTestEnabled ? 'AI obstacle test enabled' : 'AI obstacle test disabled — tap to enable'
+              aiTestEnabled
+                ? 'AI navigation active — tap to stop'
+                : 'AI navigation off — tap to start, or say activate navigation'
             }
             accessibilityHint={
               aiTestEnabled
-                ? 'Turns off automatic obstacle inference on the camera.'
-                : 'Turns on YOLO detection and periodic spoken distances.'
+                ? 'Stops obstacle detection and Groq navigation guidance.'
+                : 'Starts YOLO obstacle detection plus Groq detailed navigation instructions.'
             }
           >
             <MaterialCommunityIcons name="brain" size={15} color={aiTestEnabled ? COLORS.btnText : COLORS.teal} />

@@ -26,14 +26,7 @@ import uvicorn
 
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
 from api.llava_navigation import run_llava_navigation_if_enabled
-from api.mobilenet_v2_pipeline import MobileNetV2Pipeline
 from api.groq_navigation import run_groq_navigation, status as groq_status
-
-# Sleep mode: Gemini + LLaVA disabled by default when Groq is the main path.
-# Re-enable explicitly with ENABLE_GEMINI=1 / ENABLE_LLAVA_NAV=1 / ENABLE_SCENE=1.
-os.environ.setdefault("ENABLE_GEMINI", "0")
-os.environ.setdefault("ENABLE_LLAVA_NAV", "0")
-os.environ.setdefault("ENABLE_SCENE", "0")
 
 _DEFAULT_COCO = "yolov8n.pt"
 # Chemin poids : config par défaut, ou YOLO_WEIGHTS=yolov8n.pt pour COCO 80 classes
@@ -74,17 +67,30 @@ app.add_middleware(
 )
 
 model: YOLO | None = None
-mobilenet_pipeline: MobileNetV2Pipeline | None = None
+_gemini_status: dict[str, Any] = {"enabled": False, "model": None, "ok": False, "error": "Not checked yet"}
 
 @app.on_event("startup")
 def load_model():
-    global model, mobilenet_pipeline
+    global model, _gemini_status
     print(
         f"Loading YOLO from {MODEL_PATH} "
         f"(conf={CONF}, iou={YOLO_IOU}, imgsz={YOLO_IMGSZ}, max_det={YOLO_MAX_DET})..."
     )
     model = YOLO(MODEL_PATH)
-    mobilenet_pipeline = MobileNetV2Pipeline()
+    gst = groq_status()
+    if gst.get("has_key") and gst.get("enabled"):
+        print(f"[Groq] Ready (model={gst.get('model')}, primary VLM path).")
+    else:
+        reason = "Missing GROQ_API_KEY" if not gst.get("has_key") else "Disabled (ENABLE_GROQ=0)"
+        print(f"[Groq] Not ready: {reason}")
+    has_gem_key = bool((os.environ.get("GEMINI_API_KEY") or config.GEMINI_API_KEY or "").strip())
+    _gemini_status = {
+        "enabled": has_gem_key,
+        "model": config.GEMINI_TTS_MODEL,
+        "ok": has_gem_key,
+        "error": None if has_gem_key else "Missing GEMINI_API_KEY",
+    }
+    print(f"[Gemini] Standby (key={'set' if has_gem_key else 'missing'}, used only when use_gemini=true).")
 
 @app.get("/")
 def root() -> dict[str, Any]:
@@ -105,15 +111,16 @@ def health() -> dict[str, Any]:
         "horizontal_fov_deg": HFOV_DEG,
         "depth_scale_default": DEPTH_SCALE_ENV,
         "engine": "PFE-Phase3-Hybrid",
-        "mobilenet_v2": mobilenet_pipeline.status() if mobilenet_pipeline else {"enabled": False},
+        "gemini": _gemini_status,
         "groq": groq_status(),
     }
 
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
-    use_gemini: str = Form("true"),
-    use_groq: str = Form("false"),
+    use_gemini: str = Form("false"),
+    use_groq: str = Form("true"),
+    groq_mode: str = Form("describe"),
     detailed: str = Form("false"),
     hfov_deg: str | None = Form(None),
     depth_scale: str | None = Form(None),
@@ -123,6 +130,7 @@ async def predict(
     img = Image.open(io.BytesIO(content)).convert("RGB")
     img = ImageOps.exif_transpose(img) # Fix iPhone portrait rotation
     w, h = img.size
+    print(f"\n[/predict] New request — image={w}x{h}, detailed={detailed}, use_groq={use_groq}({groq_mode}), use_gemini={use_gemini}")
 
     req_hfov = _parse_opt_float(hfov_deg, HFOV_DEG, 40.0, 95.0)
     req_scale = _parse_opt_float(depth_scale, DEPTH_SCALE_ENV, 0.35, 2.5)
@@ -170,18 +178,9 @@ async def predict(
             "depth_method": depth_method,
         })
 
-    # Scene recognition (MobileNetV2 if available, otherwise Gemini caption fallback).
-    scene_list = None
-    nav_mbv2 = {"label": None, "probability": None, "error": "MobileNetV2 disabled."}
-    if mobilenet_pipeline:
-        scene_list = mobilenet_pipeline.scene_top5(img)
-        nav_mbv2 = mobilenet_pipeline.navigation(img, detections)
-    if not scene_list and os.environ.get("ENABLE_SCENE", "0").strip().lower() not in ("0", "false", "no", "off"):
-        scene_list = scene_top5_cached(img)
-
-    # Groq + Llama 4 Scout — only when explicitly requested (e.g. Describe button).
+    # Groq + Llama 4 Scout. mode=describe (pure description) or navigate (with YOLO data).
     if str(use_groq).strip().lower() in ("1", "true", "yes", "on"):
-        groq_result = run_groq_navigation(img, detections)
+        groq_result = run_groq_navigation(img, detections, mode=groq_mode)
     else:
         groq_result = {
             "scene": None,
@@ -190,13 +189,19 @@ async def predict(
             "focus": None,
             "ms": 0.0,
             "model": None,
+            "mode": None,
             "error": "Skipped (use_groq=false).",
         }
-    if groq_result.get("scene") and not scene_list:
-        scene_list = [{"label": groq_result["scene"], "probability": 1.0}]
 
-    # Gemini sleeping by default — only runs when ENABLE_GEMINI=1 and use_gemini != false.
-    if str(use_gemini).strip().lower() in ("0", "false", "no", "off"):
+    # Scene list — prefer Groq's caption, fallback to Gemini scene head if explicitly enabled.
+    scene_list = None
+    if groq_result.get("scene"):
+        scene_list = [{"label": groq_result["scene"], "probability": 1.0}]
+    elif os.environ.get("ENABLE_SCENE", "0").strip().lower() in ("1", "true", "yes", "on"):
+        scene_list = scene_top5_cached(img)
+
+    # Gemini = optional secondary path. Off by default now (Groq is main).
+    if str(use_gemini).strip().lower() not in ("1", "true", "yes", "on"):
         gem = {
             "text": None,
             "darija": None,
@@ -210,22 +215,32 @@ async def predict(
             "darija": None,
             "risk": None,
             "focus": None,
-            "error": "Gemini sleeping (ENABLE_GEMINI=0). Groq is main.",
+            "error": "Gemini disabled (ENABLE_GEMINI=0). Groq is main.",
         }
     else:
         gem = run_gemini(img, detections, scene_list, req_hfov, detailed=is_detailed)
 
     navigation = run_llava_navigation_if_enabled(img, detections, w, h, scene_list)
 
+    total_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+    det_names = [f"{d['name']} {d['distance_m']}m" for d in detections] if detections else ["none"]
+    groq_scene = (groq_result.get("scene") or "—")[:120]
+    groq_guide = (groq_result.get("guidance_en") or groq_result.get("error") or "—")[:120]
+    groq_risk = groq_result.get("risk") or "—"
+    groq_focus = groq_result.get("focus") or "—"
+    print(f"[/predict] YOLO={round(yolo_ms,1)}ms | detections={det_names}")
+    print(f"[/predict] Groq ({groq_result.get('ms')}ms) | risk={groq_risk} | focus={groq_focus}")
+    print(f"[/predict]   scene    : {groq_scene}")
+    print(f"[/predict]   guidance : {groq_guide}")
+    print(f"[/predict] total={total_ms}ms")
     return {
         "detections": detections,
         "inference_ms": round(yolo_ms, 2),
         "scene": {"top5": scene_list},
-        "navigation_mobilenet_v2": nav_mbv2,
         "groq": groq_result,
         "gemini": gem,
         "navigation": navigation,
-        "pipeline_ms": round((time.perf_counter() - t0) * 1000.0, 2)
+        "pipeline_ms": total_ms
     }
 
 @app.post("/voice-query")

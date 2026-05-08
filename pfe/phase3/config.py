@@ -73,5 +73,6 @@ WARNING_M      = 4.0
 MAX_DISTANCE_M = 15.0
 
 # --- GEMINI TTS ---
-GEMINI_TTS_MODEL = "gemini-1.5-flash"
+# Allow runtime override for quick model testing.
+GEMINI_TTS_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview").strip() or "gemini-3.1-flash-lite-preview"
 GEMINI_TIMEOUT_S = 6

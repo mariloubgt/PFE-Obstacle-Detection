@@ -19,12 +19,26 @@ function tryLoadSpeechRecognitionNative() {
   }
 }
 
-function matchesPhrase(text) {
-  const n = String(text || '')
+function normalize(text) {
+  return String(text || '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function matchesDescribe(text) {
+  const n = normalize(text);
   return /\bdescribe\b/.test(n) && /\benvironment\b/.test(n);
+}
+
+function matchesActivateNav(text) {
+  const n = normalize(text);
+  return /\b(activate|start|begin|enable)\b/.test(n) && /\bnavigation\b/.test(n);
+}
+
+function matchesStopNav(text) {
+  const n = normalize(text);
+  return /\b(stop|deactivate|end|disable|cancel)\b/.test(n) && /\bnavigation\b/.test(n);
 }
 
 /**
@@ -38,12 +52,22 @@ export function useDescribeEnvironmentHotword({
   cameraRef,
   alertVolumeRef,
   onPhraseMatched,
+  onActivateNavigation,
+  onStopNavigation,
 }) {
   const isFocused = useIsFocused();
   const onMatchedRef = useRef(onPhraseMatched);
+  const onActivateNavRef = useRef(onActivateNavigation);
+  const onStopNavRef = useRef(onStopNavigation);
   useEffect(() => {
     onMatchedRef.current = onPhraseMatched;
   }, [onPhraseMatched]);
+  useEffect(() => {
+    onActivateNavRef.current = onActivateNavigation;
+  }, [onActivateNavigation]);
+  useEffect(() => {
+    onStopNavRef.current = onStopNavigation;
+  }, [onStopNavigation]);
 
   useEffect(() => {
     /** Do not require native STT unless the feature is active (avoids crashing / errors in Expo Go). */
@@ -130,19 +154,28 @@ export function useDescribeEnvironmentHotword({
         sessionActive = true;
         Speech.stop();
         pausePreviewSafely();
-        Speech.speak('Listening. Say describe environment.', {
-          language: 'en-US',
-          rate: 0.92,
-          ...volOpts(),
-        });
+        Speech.speak(
+          'Listening. Say describe environment, activate navigation, or stop navigation.',
+          {
+            language: 'en-US',
+            rate: 0.92,
+            ...volOpts(),
+          }
+        );
 
-        const delayMs = Platform.OS === 'ios' ? 1700 : 900;
+        const delayMs = Platform.OS === 'ios' ? 1900 : 1100;
         const startTimer = setTimeout(() => {
           if (cancelled || !sessionActive) return;
           ExpoSpeechRecognitionModule.start({
             lang: 'en-US',
             interimResults: true,
-            contextualStrings: ['describe environment'],
+            contextualStrings: [
+              'describe environment',
+              'activate navigation',
+              'start navigation',
+              'stop navigation',
+              'deactivate navigation',
+            ],
             continuous: Platform.OS !== 'ios',
           });
         }, delayMs);
@@ -154,7 +187,12 @@ export function useDescribeEnvironmentHotword({
           if (!sessionActive || cancelled) return;
           const results = ev?.results || [];
           const text = results.map((r) => r.transcript).join(' ');
-          if (!matchesPhrase(text)) return;
+
+          let action = null;
+          if (matchesDescribe(text)) action = 'describe';
+          else if (matchesStopNav(text)) action = 'stopNav';
+          else if (matchesActivateNav(text)) action = 'activateNav';
+          if (!action) return;
 
           const now = Date.now();
           if (now - lastFireAt < PHRASE_COOLDOWN_MS) return;
@@ -175,14 +213,20 @@ export function useDescribeEnvironmentHotword({
 
           resumePreviewSafely();
 
-          const fn = onMatchedRef.current;
+          let fn = null;
+          if (action === 'describe') fn = onMatchedRef.current;
+          else if (action === 'activateNav') fn = onActivateNavRef.current;
+          else if (action === 'stopNav') fn = onStopNavRef.current;
+
           Promise.resolve(fn && fn())
             .catch(() => {})
             .finally(() => {
               if (cancelled) return;
+              const delay =
+                action === 'describe' ? RESTART_AFTER_DESCRIBE_MS : 1500;
               const t = setTimeout(() => {
                 startRecognition();
-              }, RESTART_AFTER_DESCRIBE_MS);
+              }, delay);
               timers.push(t);
             });
         })
