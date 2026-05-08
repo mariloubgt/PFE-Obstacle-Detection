@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { NativeModules } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 
-/** Separate cooldown when describing — avoids interrupting Gemini / duplicate captures */
-const DESCRIBE_COOLDOWN_MS = 2200;
-const NAV_COOLDOWN_MS = 1000;
+/** Short so repeated volume presses feel like “every tap” (each still opens a new describe). */
+const DESCRIBE_COOLDOWN_MS = 450;
 
 /**
- * Physical volume hardware: describe scene, open Scene Query, or off (settings).
- * Requires `react-native-volume-manager`; no-ops in Expo Go without the native module.
+ * Physical volume buttons → describe scene (or open SceneQuery).
+ * Uses a stable ref so the native subscription is created once and never torn down
+ * on re-renders — only when `action` actually changes.
  */
 export function useVolumeHardwareShortcut(navigation, options = {}) {
   const {
@@ -16,52 +16,68 @@ export function useVolumeHardwareShortcut(navigation, options = {}) {
     action = 'none',
     onDescribeEnvironment,
   } = options;
+
   const isFocused = useIsFocused();
-  const lastFired = useRef(0);
+  const lastFiredRef = useRef(0);
 
-  const fire = useCallback(() => {
-    if (!enabled || !isFocused) return;
+  // Keep a stable ref to the latest callback so the subscription never needs
+  // to be recreated when onDescribeEnvironment changes identity.
+  const onDescribeRef = useRef(onDescribeEnvironment);
+  useEffect(() => {
+    onDescribeRef.current = onDescribeEnvironment;
+  }, [onDescribeEnvironment]);
+
+  const isFocusedRef = useRef(isFocused);
+  useEffect(() => {
+    isFocusedRef.current = isFocused;
+  }, [isFocused]);
+
+  const enabledRef = useRef(enabled);
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
+
+  // Stable handler — never changes identity.
+  const handleVolume = useCallback(() => {
+    if (!enabledRef.current || !isFocusedRef.current) return;
     const now = Date.now();
-    const cooldown = action === 'describe' ? DESCRIBE_COOLDOWN_MS : NAV_COOLDOWN_MS;
-    if (now - lastFired.current < cooldown) return;
-    lastFired.current = now;
+    if (now - lastFiredRef.current < DESCRIBE_COOLDOWN_MS) return;
+    lastFiredRef.current = now;
 
-    if (action === 'describe' && typeof onDescribeEnvironment === 'function') {
-      onDescribeEnvironment();
+    if (action === 'describe') {
+      const fn = onDescribeRef.current;
+      if (typeof fn === 'function') fn();
       return;
     }
-    if (action === 'scene_query' && typeof navigation?.navigate === 'function') {
-      navigation.navigate('SceneQuery');
+    if (action === 'scene_query') {
+      const fn = onDescribeRef.current;
+      if (typeof fn === 'function') {
+        fn();
+        return;
+      }
+      navigation?.navigate?.('SceneQuery');
     }
-  }, [action, enabled, isFocused, navigation, onDescribeEnvironment]);
+  }, [action, navigation]); // only recreate when action/navigation change
 
   useEffect(() => {
     if (action === 'none') return undefined;
+    if (!NativeModules.VolumeManager) return undefined;
 
-    const volumeModule = NativeModules.VolumeManager;
-    if (
-      !volumeModule ||
-      typeof volumeModule.addListener !== 'function' ||
-      typeof volumeModule.removeListeners !== 'function'
-    ) {
-      return undefined;
-    }
     let subscription;
     try {
       // eslint-disable-next-line global-require
-      const { addVolumeListener } = require('react-native-volume-manager');
-      subscription = addVolumeListener(() => {
-        fire();
-      });
+      const mod = require('react-native-volume-manager');
+      // Activate iOS audio session so outputVolume KVO fires.
+      if (Platform.OS === 'ios' && typeof mod.enable === 'function') {
+        void Promise.resolve(mod.enable(true, true)).catch(() => {});
+      }
+      subscription = mod.addVolumeListener(handleVolume);
     } catch {
       return undefined;
     }
+
     return () => {
-      try {
-        subscription?.remove?.();
-      } catch {
-        // ignore
-      }
+      try { subscription?.remove?.(); } catch { /* ignore */ }
     };
-  }, [fire, action]);
+  }, [action, handleVolume]); // stable — only changes when action changes
 }

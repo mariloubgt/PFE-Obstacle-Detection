@@ -63,7 +63,7 @@ const FRAME_PRESETS = [
 const VOLUME_HW_OPTIONS = [
   { value: 'none', label: 'Off' },
   { value: 'describe', label: 'Describe environment' },
-  { value: 'scene_query', label: 'Voice scene chat' },
+  { value: 'scene_query', label: 'Open scene description chat' },
 ];
 
 function formatFrameValue(ms) {

@@ -366,6 +366,95 @@ def run_groq_navigation(
             _in_flight = False
 
 
+GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_WHISPER_MODEL = "whisper-large-v3"
+
+
+def run_groq_voice_query(
+    pil_rgb: Image.Image,
+    audio_bytes: bytes,
+    audio_mime: str,
+) -> dict[str, Any]:
+    """
+    1. Transcribe user audio with Groq Whisper.
+    2. Send image + transcribed question to Groq Llama 4 Scout.
+    Returns {answer, user_said, error}.
+    """
+    if not _enabled():
+        return {"answer": None, "user_said": None, "error": "Groq disabled."}
+
+    key = _api_key()
+    if not key:
+        return {"answer": None, "user_said": None, "error": "Missing GROQ_API_KEY."}
+
+    headers_auth = {"Authorization": f"Bearer {key}"}
+
+    # --- Step 1: Transcribe audio ---
+    ext = "m4a"
+    if "wav" in audio_mime:
+        ext = "wav"
+    elif "webm" in audio_mime:
+        ext = "webm"
+    elif "mp4" in audio_mime or "m4a" in audio_mime:
+        ext = "m4a"
+    elif "ogg" in audio_mime:
+        ext = "ogg"
+
+    try:
+        transcribe_resp = requests.post(
+            GROQ_WHISPER_URL,
+            headers=headers_auth,
+            files={"file": (f"audio.{ext}", audio_bytes, audio_mime)},
+            data={"model": GROQ_WHISPER_MODEL},
+            timeout=25.0,
+        )
+        transcribe_resp.raise_for_status()
+        user_said = transcribe_resp.json().get("text", "").strip()
+    except Exception as exc:  # noqa: BLE001
+        return {"answer": None, "user_said": None, "error": f"Whisper transcription failed: {exc}"}
+
+    if not user_said:
+        return {"answer": None, "user_said": "", "error": "Could not understand audio."}
+
+    # --- Step 2: Answer with image ---
+    data_url = _encode_image_data_url(pil_rgb)
+    system = (
+        "You are a helpful assistant for a blind person. "
+        "You see the image they are looking at. Answer their question "
+        "based strictly on what is visible. Be concise (max 40 words). "
+        "Use plain factual English. Never hedge with 'possibly' or 'perhaps'."
+    )
+    user_prompt = f'The user asked: "{user_said}"\n\nDescribe what you see in the image that is relevant to this question.'
+
+    try:
+        chat_resp = requests.post(
+            GROQ_URL,
+            json={
+                "model": DEFAULT_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": user_prompt},
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ],
+                    },
+                ],
+                "temperature": 0.0,
+                "max_tokens": 120,
+            },
+            headers={**headers_auth, "Content-Type": "application/json"},
+            timeout=25.0,
+        )
+        chat_resp.raise_for_status()
+        answer = chat_resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as exc:  # noqa: BLE001
+        return {"answer": None, "user_said": user_said, "error": f"Groq answer failed: {exc}"}
+
+    return {"answer": answer, "user_said": user_said, "error": None}
+
+
 def status() -> dict[str, Any]:
     return {
         "enabled": _enabled(),

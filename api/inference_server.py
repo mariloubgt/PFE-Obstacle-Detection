@@ -250,45 +250,33 @@ async def voice_query(
     hfov_deg: str | None = Form(None),
 ) -> dict[str, Any]:
     """
-    Multimodal endpoint: takes an image and a voice recording.
-    Returns Gemini's Darija answer.
+    Multimodal endpoint: transcribes user audio with Groq Whisper,
+    then answers the question using Groq Llama 4 Scout + the image.
     """
     t0 = time.perf_counter()
-    
-    # Read Image
+
     img_content = await image.read()
     img = Image.open(io.BytesIO(img_content)).convert("RGB")
     img = ImageOps.exif_transpose(img)
-    w, h = img.size
-    
-    # Read Audio
+
     audio_content = await audio.read()
-    audio_mime = audio.content_type or "audio/wav"
+    audio_mime = audio.content_type or "audio/m4a"
 
-    req_hfov = _parse_opt_float(hfov_deg, HFOV_DEG, 40.0, 95.0)
+    from api.groq_navigation import run_groq_voice_query
+    res = run_groq_voice_query(img, audio_content, audio_mime)
 
-    # 1. Run YOLO to get context
-    results = model.predict(img, conf=CONF, iou=YOLO_IOU, imgsz=YOLO_IMGSZ, verbose=False)[0]
-    detections = []
-    for box in results.boxes:
-        xyxy = box.xyxy[0].cpu().numpy()
-        dist_m, _ = estimate_distance_m(xyxy[0], xyxy[1], xyxy[2], xyxy[3], w, h, results.names[int(box.cls[0])], req_hfov)
-        detections.append({"name": results.names[int(box.cls[0])], "distance_m": dist_m})
-
-    # 2. Run Scene Model
-    scene_list = scene_top5_cached(img)
-
-    # 3. Run Gemini Multimodal (Audio + Image)
-    from api.vision_pipeline import run_voice_query
-    res = run_voice_query(img, audio_content, audio_mime, detections, scene_list)
+    print(
+        f"[voice-query] user_said={res.get('user_said')!r} | "
+        f"answer={str(res.get('answer',''))[:80]!r} | "
+        f"error={res.get('error')!r} | "
+        f"{round((time.perf_counter()-t0)*1000)}ms"
+    )
 
     return {
-        "answer": res.get("darija"),
+        "answer": res.get("answer"),
         "user_said": res.get("user_said"),
-        "risk": res.get("risk"),
-        "focus": res.get("focus"),
         "pipeline_ms": round((time.perf_counter() - t0) * 1000.0, 2),
-        "error": res.get("error")
+        "error": res.get("error"),
     }
 
 if __name__ == "__main__":

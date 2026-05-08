@@ -8,6 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import {
+  InteractionManager,
   Modal,
   Platform,
   Pressable,
@@ -30,6 +31,7 @@ import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { useDescribeEnvironmentHotword } from '../hooks/useDescribeEnvironmentHotword';
+import { triggerSceneDescribe } from './SceneQueryScreen';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back', front: 'front' };
@@ -265,83 +267,26 @@ export default function MainNavigationScreen({ navigation }) {
     });
   }, []);
 
-  const onDescribeEnvironmentCommand = useCallback(async () => {
-    if (!cameraRef.current) return;
-
-    for (let i = 0; i < 40 && inFlightRef.current; i++) {
-      await new Promise((r) => setTimeout(r, 80));
-    }
-    if (inFlightRef.current) return;
-
-    const po = predictOptsRef.current;
-
-    inFlightRef.current = true;
-    try {
-      Speech.stop();
-      Speech.speak('Describing.', {
-        language: 'en-US',
-        rate: 0.92,
-        ...(Platform.OS === 'ios' && {
-          volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
-        }),
-      });
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.28,
-        skipProcessing: true,
-      });
-
-      const api = await loadInferenceApiUrl();
-      if (!api) {
-        Speech.stop();
-        Speech.speak('Set the inference server address in Settings.', {
-          language: 'en-US',
-          rate: 0.92,
-        });
-        return;
-      }
-      const data = await predictImage(api, photo.uri, {
-        hfovDeg: po.hfovDeg,
-        depthScale: po.depthScale,
-        useGemini: false,
-        useGroq: true,
-        detailed: true,
-      });
-      const groqScene = typeof data?.groq?.scene === 'string' ? data.groq.scene.trim() : '';
-      const groqGuidance = typeof data?.groq?.guidance_en === 'string' ? data.groq.guidance_en.trim() : '';
-      const groqErr = data?.groq?.error;
-      const sceneFallback =
-        typeof data?.scene?.top5?.[0]?.label === 'string'
-          ? data.scene.top5[0].label.trim()
-          : '';
-      const groqCombined = [groqScene, groqGuidance].filter(Boolean).join(' ').trim();
-      const toSpeak = groqCombined
-        || sceneFallback
-        || (groqErr ? `Could not describe the scene. ${groqErr}` : 'No description available.');
-      Speech.stop();
-      const vol = alertVolumeRef.current;
-      Speech.speak(toSpeak, {
-        language: 'en-US',
-        rate: 0.92,
-        ...(Platform.OS === 'ios' && {
-          volume: Math.min(1, Math.max(0.15, vol)),
-        }),
-      });
-    } finally {
-      inFlightRef.current = false;
-    }
-  }, []);
+  /** Sound / volume key / hotword → open Scene Query then call describe directly.
+   *  Uses a module-level callback so it works whether the screen is new or already focused. */
+  const openSceneQueryWithDescribe = useCallback(() => {
+    navigation.navigate('SceneQuery');
+    InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => triggerSceneDescribe(), 150);
+    });
+  }, [navigation]);
 
   useVolumeHardwareShortcut(navigation, {
     enabled: !volumeOpen,
     action: volumeHardwareAction,
-    onDescribeEnvironment: onDescribeEnvironmentCommand,
+    onDescribeEnvironment: openSceneQueryWithDescribe,
   });
 
   useDescribeEnvironmentHotword({
     enabled: handsFreeDescribe && !volumeOpen,
     cameraRef,
     alertVolumeRef,
-    onPhraseMatched: onDescribeEnvironmentCommand,
+    onPhraseMatched: openSceneQueryWithDescribe,
     onActivateNavigation,
     onStopNavigation,
   });
@@ -511,7 +456,12 @@ export default function MainNavigationScreen({ navigation }) {
 
   // --- AI Loop (non-overlapping frames + smoothed distances) ---
   const runFrame = useCallback(async () => {
-    if (!aiTestRef.current || !cameraRef.current || inFlightRef.current) return;
+    if (
+      !aiTestRef.current ||
+      !cameraRef.current ||
+      inFlightRef.current
+    )
+      return;
     inFlightRef.current = true;
     try {
       const api = await loadInferenceApiUrl();
@@ -632,8 +582,15 @@ export default function MainNavigationScreen({ navigation }) {
             <Text style={styles.liveText}>LIVE</Text>
           </View>
           <Pressable 
-            style={[styles.aiPill, aiTestEnabled && styles.aiPillOn]} 
+            style={({ pressed }) => [
+              styles.aiPill,
+              aiTestEnabled && styles.aiPillOn,
+              pressed && styles.aiPillPressed,
+            ]}
             onPress={() => {
+              if (Platform.OS !== 'web') {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+              }
               const next = !aiTestEnabled;
               setAiTestEnabled(next);
               Speech.stop();
@@ -662,16 +619,17 @@ export default function MainNavigationScreen({ navigation }) {
             <Text style={[styles.aiPillText, aiTestEnabled && styles.aiPillTextOn]}>AI test</Text>
           </Pressable>
           <Pressable
-            style={styles.aiPill}
+            style={({ pressed }) => [styles.aiPill, pressed && styles.aiPillPressed]}
             onPress={() => {
               if (Platform.OS !== 'web') {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
               }
-              void onDescribeEnvironmentCommand();
+              openSceneQueryWithDescribe();
             }}
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
             accessibilityRole="button"
             accessibilityLabel="Describe environment scene summary"
-            accessibilityHint="Optional. Prefer volume shortcut in Settings Accessibility, or say describe environment for hands-free"
+            accessibilityHint="Opens Scene Query with a fresh scene description, same as the Sound tab."
           >
             <MaterialCommunityIcons name="microphone-outline" size={15} color={COLORS.teal} />
             <Text style={styles.aiPillText}>Describe</Text>
@@ -776,8 +734,8 @@ export default function MainNavigationScreen({ navigation }) {
             <>
               <Text style={styles.alertTitle}>AI System Idle</Text>
               <Text style={styles.alertSub}>
-                Tap Sound (bottom left) to describe the scene, or long-press Sound to change alert
-                volume. Physical volume keys and hands-free phrase work if enabled in Settings.
+                Tap Sound to open scene description and automatically hear a new summary. Go back and
+                tap Sound again anytime. Long-press Sound for alert volume.
               </Text>
             </>
           )}
@@ -787,12 +745,13 @@ export default function MainNavigationScreen({ navigation }) {
       {/* BOTTOM NAV */}
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 15) }]}>
         <Pressable
-          style={styles.navItem}
+          style={({ pressed }) => [styles.navItem, pressed && styles.navPressed]}
+          hitSlop={{ top: 14, bottom: 14, left: 16, right: 16 }}
           onPress={() => {
             if (Platform.OS !== 'web') {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
             }
-            void onDescribeEnvironmentCommand();
+            openSceneQueryWithDescribe();
           }}
           onLongPress={() => {
             if (Platform.OS !== 'web') {
@@ -800,10 +759,10 @@ export default function MainNavigationScreen({ navigation }) {
             }
             setVolumeOpen(true);
           }}
-          delayLongPress={450}
+          delayLongPress={3000}
           accessibilityRole="button"
-          accessibilityLabel="Describe environment"
-          accessibilityHint="Tap once to describe the scene with audio. Press and hold to open alert volume slider."
+          accessibilityLabel="Scene description — opens Scene Query"
+          accessibilityHint="Opens Scene Query and reads a scene description. Press and hold to open alert volume slider."
         >
           <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
           <Text style={styles.navLabel}>Sound</Text>
@@ -813,8 +772,8 @@ export default function MainNavigationScreen({ navigation }) {
           style={styles.centerFab}
           onPress={() => navigation.navigate('SceneQuery')}
           accessibilityRole="button"
-          accessibilityLabel="Voice scene queries"
-          accessibilityHint="Opens ask about the scene"
+          accessibilityLabel="Scene descriptions"
+          accessibilityHint="Opens the scene description chat. Use Describe scene for a fresh summary."
         >
           <MaterialCommunityIcons name="chart-box-outline" size={30} color={COLORS.btnText} />
         </Pressable>
@@ -867,6 +826,7 @@ const styles = StyleSheet.create({
   aiPillOn: { backgroundColor: COLORS.teal, borderColor: COLORS.teal },
   aiPillText: { color: COLORS.teal, fontSize: 12, fontWeight: '700' },
   aiPillTextOn: { color: COLORS.btnText },
+  aiPillPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
   visionArea: { flex: 1, marginHorizontal: 15, marginVertical: 10, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111' },
   cameraTouchable: { flex: 1 },
   tapFlash: {
@@ -943,8 +903,19 @@ const styles = StyleSheet.create({
   },
   inferenceMeta: { color: COLORS.grey, fontSize: 11, marginTop: 2, lineHeight: 16 },
   inferenceErr: { color: COLORS.danger, fontSize: 12 },
-  bottomNav: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.95)', paddingVertical: 10, borderTopLeftRadius: 30, borderTopRightRadius: 30 },
-  navItem: { alignItems: 'center', gap: 4 },
+  bottomNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15,23,42,0.95)',
+    paddingVertical: 10,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    zIndex: 100,
+    elevation: 24,
+  },
+  navItem: { alignItems: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 12 },
+  navPressed: { opacity: 0.72 },
   navLabel: { color: COLORS.grey, fontSize: 10, fontWeight: '600' },
   centerFab: { width: 64, height: 64, borderRadius: 32, backgroundColor: COLORS.teal, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: COLORS.teal, shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },

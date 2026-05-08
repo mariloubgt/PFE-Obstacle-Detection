@@ -1,28 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Audio } from 'expo-av';
+import { useFocusEffect } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import {
-  Alert,
-  Animated,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ExpoCamera from 'expo-camera';
 import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
-import { querySceneFromAudioAsync } from '../services/sceneQueryApi';
+import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
+import { predictImage } from '../services/predict';
+import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
+import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back' };
 
+// Module-level slot: MainNavigationScreen calls triggerSceneDescribe() directly.
+// No React Navigation param tricks — guaranteed to fire every tap.
+let _sceneDescribeCallback = null;
+export function triggerSceneDescribe() {
+  if (_sceneDescribeCallback) _sceneDescribeCallback();
+}
+
 const WELCOME_MESSAGE =
-  'Hello! Ask about your surroundings and I will describe the scene.';
+  'Use Sound (top right), Describe scene, or Sound on the main screen — each tap runs a fresh description.';
 
 function nextId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -32,80 +35,16 @@ function formatTime(d = new Date()) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function Waveform({ active }) {
-  const a1 = useRef(new Animated.Value(0.4)).current;
-  const a2 = useRef(new Animated.Value(0.7)).current;
-  const a3 = useRef(new Animated.Value(0.5)).current;
-  const a4 = useRef(new Animated.Value(0.85)).current;
-
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const mk = (v, delay) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(v, {
-            toValue: 1,
-            duration: 280 + delay,
-            useNativeDriver: false,
-          }),
-          Animated.timing(v, {
-            toValue: 0.25,
-            duration: 280 + delay,
-            useNativeDriver: false,
-          }),
-        ])
-      );
-    const l1 = mk(a1, 0);
-    const l2 = mk(a2, 60);
-    const l3 = mk(a3, 120);
-    const l4 = mk(a4, 40);
-    l1.start();
-    l2.start();
-    l3.start();
-    l4.start();
-    return () => {
-      l1.stop();
-      l2.stop();
-      l3.stop();
-      l4.stop();
-    };
-  }, [active, a1, a2, a3, a4]);
-
-  const bar = (anim) => (
-    <Animated.View
-      style={[
-        styles.waveBar,
-        {
-          height: anim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [6, 22],
-          }),
-        },
-      ]}
-    />
-  );
-
-  return (
-    <View style={styles.waveRow}>
-      {bar(a1)}
-      {bar(a2)}
-      {bar(a3)}
-      {bar(a4)}
-    </View>
-  );
-}
-
 export default function SceneQueryScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef(null);
-  const recordingRef = useRef(null);
   const cameraRef = useRef(null);
+  /** Latest describe request wins; older runs exit before speaking / appending. */
+  const describeGenerationRef = useRef(0);
+  const [camPermission, setCamPermission] = useState(null);
   const [messages, setMessages] = useState(() => [
     { id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() },
   ]);
-  const [isListening, setIsListening] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
 
   const speakReply = useCallback((text) => {
@@ -127,99 +66,180 @@ export default function SceneQueryScreen({ navigation }) {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
   }, []);
 
-  const startRecording = useCallback(async () => {
+  const refreshCamPermission = useCallback(async () => {
+    const get =
+      ExpoCamera.getCameraPermissionsAsync ||
+      ExpoCamera.getPermissionsAsync ||
+      ExpoCamera.Camera?.getCameraPermissionsAsync ||
+      ExpoCamera.Camera?.getPermissionsAsync;
+    if (!get) return;
     try {
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Microphone', 'Audio permission is required for voice input.');
+      const r = await get();
+      setCamPermission(r);
+    } catch {
+      setCamPermission(null);
+    }
+  }, []);
+
+  const requestCameraPermission = useCallback(async () => {
+    const req =
+      ExpoCamera.requestCameraPermissionsAsync ||
+      ExpoCamera.requestPermissionsAsync ||
+      ExpoCamera.Camera?.requestCameraPermissionsAsync ||
+      ExpoCamera.Camera?.requestPermissionsAsync;
+    if (!req) return false;
+    const r = await req();
+    setCamPermission(r);
+    return Boolean(r?.granted);
+  }, []);
+
+  const runGroqDescribe = useCallback(async () => {
+    const generation = ++describeGenerationRef.current;
+    const stale = () => generation !== describeGenerationRef.current;
+    setIsTyping(true);
+
+    Speech.stop();
+
+    try {
+      if (stale()) return;
+      Speech.speak('Describing.', {
+        language: 'en-US',
+        rate: 0.92,
+      });
+
+      let granted = camPermission?.granted === true;
+      if (!granted) {
+        granted = await requestCameraPermission();
+      }
+      if (stale()) return;
+      if (!granted) {
+        appendMessage({
+          id: nextId(),
+          role: 'assistant',
+          text: 'Camera permission is needed. Tap Allow camera on the preview.',
+        });
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
-      const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await rec.startAsync();
-      recordingRef.current = rec;
-      setIsListening(true);
-    } catch (e) {
-      Alert.alert('Recording', e?.message || String(e));
-    }
-  }, []);
 
-  const stopRecording = useCallback(async () => {
-    const rec = recordingRef.current;
-    if (!rec) {
-      setIsListening(false);
-      return null;
-    }
-    try {
-      await rec.stopAndUnloadAsync();
-      const uri = rec.getURI();
-      recordingRef.current = null;
-      return uri;
-    } catch (e) {
-      recordingRef.current = null;
-      return null;
-    } finally {
-      setIsListening(false);
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
+      if (!cameraRef.current) {
+        appendMessage({
+          id: nextId(),
+          role: 'assistant',
+          text: 'Camera is not ready.',
         });
-      } catch {
-        // ignore
+        return;
       }
-    }
-  }, []);
 
-  const onPressMic = useCallback(async () => {
-    if (isTyping) return;
-    if (!isListening) {
-      await startRecording();
-      return;
-    }
-    
-    // Stop recording and get audio URI
-    const audioUri = await stopRecording();
-    if (!audioUri) return;
-
-    setIsTyping(true);
-    try {
-      // 1. Take a picture right now to see the environment
-      let photoUri = null;
-      if (cameraRef.current) {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.3,
+      let photo;
+      try {
+        photo = await cameraRef.current.takePictureAsync({
+          quality: 0.28,
           skipProcessing: true,
         });
-        photoUri = photo.uri;
+      } catch (camErr) {
+        appendMessage({
+          id: nextId(),
+          role: 'assistant',
+          text:
+            camErr instanceof Error
+              ? `Could not capture a frame: ${camErr.message}`
+              : 'Could not capture a camera frame.',
+        });
+        return;
       }
 
-      // 2. Call our new multimodal endpoint
-      const answer = await querySceneFromAudioAsync(photoUri, audioUri);
-      
-      if (answer.userSaid) {
-        appendMessage({ id: nextId(), role: 'user', text: answer.userSaid });
+      if (stale()) return;
+
+      const api = await loadInferenceApiUrl();
+      if (stale()) return;
+      if (!api) {
+        appendMessage({
+          id: nextId(),
+          role: 'assistant',
+          text: 'Set the inference server address in Settings.',
+        });
+        return;
       }
-      
-      appendMessage({ id: nextId(), role: 'assistant', text: answer.text });
-      speakReply(answer.text);
-    } catch (e) {
-      console.error(e);
-      appendMessage({
-        id: nextId(),
-        role: 'assistant',
-        text: 'Could not reach scene service. Please try again.',
-      });
+
+      const prefs = await loadAppPreferences();
+      if (stale()) return;
+      let data;
+      try {
+        data = await predictImage(api, photo.uri, {
+          hfovDeg: prefs.cameraHfovDeg,
+          depthScale: prefs.depthScale,
+          useGemini: false,
+          useGroq: true,
+          groqMode: 'describe',
+          detailed: true,
+        });
+      } catch (netErr) {
+        if (stale()) return;
+        const msg =
+          netErr instanceof Error ? netErr.message : String(netErr ?? 'Network error');
+        appendMessage({
+          id: nextId(),
+          role: 'assistant',
+          text: msg.length > 200 ? 'Could not reach the inference server.' : msg,
+        });
+        return;
+      }
+
+      if (stale()) return;
+
+      const groqScene = typeof data?.groq?.scene === 'string' ? data.groq.scene.trim() : '';
+      const groqGuidance =
+        typeof data?.groq?.guidance_en === 'string' ? data.groq.guidance_en.trim() : '';
+      const groqErr = data?.groq?.error;
+      const sceneFallback =
+        typeof data?.scene?.top5?.[0]?.label === 'string'
+          ? data.scene.top5[0].label.trim()
+          : '';
+      const groqCombined = [groqScene, groqGuidance].filter(Boolean).join(' ').trim();
+      const toSpeak =
+        groqCombined ||
+        sceneFallback ||
+        (groqErr ? `Could not describe the scene. ${groqErr}` : 'No description available.');
+
+      appendMessage({ id: nextId(), role: 'assistant', text: toSpeak });
+      speakReply(toSpeak);
     } finally {
-      setIsTyping(false);
+      if (generation === describeGenerationRef.current) {
+        setIsTyping(false);
+      }
     }
-  }, [appendMessage, isListening, isTyping, speakReply, startRecording, stopRecording]);
+  }, [appendMessage, camPermission?.granted, requestCameraPermission, speakReply]);
+
+  const runGroqDescribeRef = useRef(runGroqDescribe);
+  runGroqDescribeRef.current = runGroqDescribe;
+
+  // Register this screen's describe function so MainNavigationScreen can call it directly.
+  useEffect(() => {
+    _sceneDescribeCallback = () => runGroqDescribeRef.current();
+    return () => { _sceneDescribeCallback = null; };
+  }, []);
+
+  const [volumeHardwareAction, setVolumeHardwareAction] = useState(
+    DEFAULTS.volumeHardwareAction
+  );
+
+  useVolumeHardwareShortcut(navigation, {
+    enabled: true,
+    action: volumeHardwareAction,
+    onDescribeEnvironment: () => {
+      void runGroqDescribeRef.current();
+    },
+  });
+
+  // Refresh camera permission + hardware-action pref each time screen comes into view.
+  useFocusEffect(
+    useCallback(() => {
+      void refreshCamPermission();
+      void loadAppPreferences().then((p) => {
+        setVolumeHardwareAction(p.volumeHardwareAction);
+      });
+    }, [refreshCamPermission])
+  );
 
   const onEndSession = useCallback(() => {
     Speech.stop();
@@ -248,10 +268,22 @@ export default function SceneQueryScreen({ navigation }) {
         >
           <MaterialCommunityIcons name="chevron-left" size={28} color={COLORS.teal} />
         </Pressable>
-        <Text style={styles.headerTitle}>Scene Query</Text>
-        <View style={styles.geminiPill}>
-          <Text style={styles.geminiPillText}>Gemini AI</Text>
-        </View>
+        <Text style={styles.headerTitle}>Scene description</Text>
+        <Pressable
+          style={({ pressed }) => [styles.headerSoundBtn, pressed && styles.pressed]}
+          onPress={() => {
+            if (Platform.OS !== 'web') {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+            }
+            void runGroqDescribe();
+          }}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Sound"
+          accessibilityHint="Same as Sound on main navigation: captures the scene and reads a new description."
+        >
+          <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
+        </Pressable>
       </View>
 
       <View style={styles.cameraContainer}>
@@ -261,7 +293,30 @@ export default function SceneQueryScreen({ navigation }) {
           type={CAMERA_TYPE.back}
           mode="picture"
         />
+        {camPermission && !camPermission.granted ? (
+          <Pressable
+            style={styles.camOverlay}
+            onPress={() => void requestCameraPermission()}
+            accessibilityRole="button"
+            accessibilityLabel="Allow camera for scene descriptions"
+          >
+            <MaterialCommunityIcons name="camera-outline" size={28} color={COLORS.tealBright} />
+            <Text style={styles.camOverlayTitle}>Allow camera</Text>
+            <Text style={styles.camOverlaySub}>Needed to grab a photo for describing</Text>
+          </Pressable>
+        ) : null}
       </View>
+
+      <Pressable
+        style={({ pressed }) => [styles.describeSceneBtn, pressed && styles.pressed]}
+        onPress={() => void runGroqDescribe()}
+        accessibilityRole="button"
+        accessibilityLabel="Describe scene"
+        accessibilityHint="Takes a photo and reads a summary. Same shortcut as Sound on navigation."
+      >
+        <MaterialCommunityIcons name="image-text" size={20} color={COLORS.btnText} />
+        <Text style={styles.describeSceneBtnText}>Describe scene</Text>
+      </Pressable>
 
       <ScrollView
         ref={scrollRef}
@@ -318,24 +373,6 @@ export default function SceneQueryScreen({ navigation }) {
         ) : null}
       </ScrollView>
 
-      <View style={styles.micBlock}>
-        <View style={styles.listeningLine}>
-          <View style={styles.listeningDot} />
-          <Text style={styles.listeningText}>
-            {isListening ? 'Listening...' : 'Tap the mic to speak'}
-          </Text>
-        </View>
-        <Pressable
-          style={[styles.micPress, isListening && styles.micPressOn]}
-          onPress={onPressMic}
-          disabled={isTyping}
-          accessibilityRole="button"
-          accessibilityLabel={isListening ? 'Stop and send' : 'Start voice input'}
-        >
-          <Waveform active={isListening} />
-        </Pressable>
-      </View>
-
       <View style={styles.footerRow}>
         <Pressable
           style={({ pressed }) => [styles.endBtn, pressed && styles.pressed]}
@@ -384,18 +421,31 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontFamily: FONTS.en.bold,
   },
-  geminiPill: {
-    backgroundColor: 'rgba(45, 212, 191, 0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(102, 210, 177, 0.4)',
+  headerSoundBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.bgElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  geminiPillText: {
-    color: COLORS.tealBright,
-    fontSize: 12,
-    fontFamily: FONTS.en.semibold,
+  describeSceneBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: COLORS.teal,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: LAYOUT.buttonRadius,
+    marginBottom: 10,
+    minHeight: 48,
+  },
+  describeSceneBtnDisabled: { opacity: 0.55 },
+  describeSceneBtnText: {
+    color: COLORS.btnText,
+    fontSize: 15,
+    fontFamily: FONTS.en.bold,
   },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 16 },
@@ -449,54 +499,6 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: COLORS.grey,
   },
-  micBlock: {
-    alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 12,
-  },
-  listeningLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  listeningDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: COLORS.teal,
-  },
-  listeningText: {
-    color: COLORS.tealBright,
-    fontSize: 14,
-    fontFamily: FONTS.en.semibold,
-  },
-  waveRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    height: 28,
-  },
-  waveBar: {
-    width: 4,
-    borderRadius: 2,
-    backgroundColor: COLORS.teal,
-  },
-  micPress: {
-    minWidth: 200,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: COLORS.borderMuted,
-    backgroundColor: COLORS.bgElevated,
-  },
-  micPressOn: {
-    borderColor: COLORS.teal,
-    backgroundColor: 'rgba(102, 210, 177, 0.08)',
-  },
   footerRow: {
     flexDirection: 'row',
     gap: 12,
@@ -547,5 +549,25 @@ const styles = StyleSheet.create({
   },
   cameraPreview: {
     flex: 1,
+  },
+  camOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: 16,
+  },
+  camOverlayTitle: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontFamily: FONTS.en.bold,
+    marginTop: 4,
+  },
+  camOverlaySub: {
+    color: COLORS.grey,
+    fontSize: 12,
+    fontFamily: FONTS.en.regular,
+    textAlign: 'center',
   },
 });
