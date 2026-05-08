@@ -776,8 +776,8 @@ export default function MainNavigationScreen({ navigation }) {
             <>
               <Text style={styles.alertTitle}>AI System Idle</Text>
               <Text style={styles.alertSub}>
-                Accessibility: Physical volume shortcut and hands-free phrase are in Settings. Tap
-                Describe only if preferred.
+                Tap Sound (bottom left) to describe the scene, or long-press Sound to change alert
+                volume. Physical volume keys and hands-free phrase work if enabled in Settings.
               </Text>
             </>
           )}
@@ -788,13 +788,25 @@ export default function MainNavigationScreen({ navigation }) {
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 15) }]}>
         <Pressable
           style={styles.navItem}
-          onPress={() => setVolumeOpen(true)}
+          onPress={() => {
+            if (Platform.OS !== 'web') {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+            }
+            void onDescribeEnvironmentCommand();
+          }}
+          onLongPress={() => {
+            if (Platform.OS !== 'web') {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            }
+            setVolumeOpen(true);
+          }}
+          delayLongPress={450}
           accessibilityRole="button"
-          accessibilityLabel="Adjust spoken alert loudness"
-          accessibilityHint="Opens a volume slider"
+          accessibilityLabel="Describe environment"
+          accessibilityHint="Tap once to describe the scene with audio. Press and hold to open alert volume slider."
         >
           <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
-          <Text style={styles.navLabel}>Volume</Text>
+          <Text style={styles.navLabel}>Sound</Text>
         </Pressable>
 
         <Pressable
