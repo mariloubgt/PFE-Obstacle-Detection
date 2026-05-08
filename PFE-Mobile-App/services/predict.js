@@ -30,13 +30,14 @@ function explainNetworkFailure(base, err) {
  * @param {string} imageUri
  * @param {{
  *   useGemini?: boolean,
+ *   useGroq?: boolean,
  *   detailed?: boolean,
  *   hfovDeg?: number,
  *   depthScale?: number,
  * }} [options]
  */
 export async function predictImage(apiBase, imageUri, options = {}) {
-  const { useGemini = true, detailed = false, hfovDeg, depthScale } = options;
+  const { useGemini = true, useGroq = false, detailed = false, hfovDeg, depthScale } = options;
   const base = (apiBase || '').replace(/\/$/, '');
   if (!base.startsWith('http')) {
     throw new Error('Invalid API URL. Set it in Settings (Phase 3 server).');
@@ -50,6 +51,7 @@ export async function predictImage(apiBase, imageUri, options = {}) {
     type: 'image/jpeg',
   });
   form.append('use_gemini', useGemini ? 'true' : 'false');
+  form.append('use_groq', useGroq ? 'true' : 'false');
   form.append('detailed', detailed ? 'true' : 'false');
   if (hfovDeg != null && Number.isFinite(Number(hfovDeg))) {
     form.append('hfov_deg', String(Number(hfovDeg)));

@@ -27,6 +27,13 @@ import uvicorn
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
 from api.llava_navigation import run_llava_navigation_if_enabled
 from api.mobilenet_v2_pipeline import MobileNetV2Pipeline
+from api.groq_navigation import run_groq_navigation, status as groq_status
+
+# Sleep mode: Gemini + LLaVA disabled by default when Groq is the main path.
+# Re-enable explicitly with ENABLE_GEMINI=1 / ENABLE_LLAVA_NAV=1 / ENABLE_SCENE=1.
+os.environ.setdefault("ENABLE_GEMINI", "0")
+os.environ.setdefault("ENABLE_LLAVA_NAV", "0")
+os.environ.setdefault("ENABLE_SCENE", "0")
 
 _DEFAULT_COCO = "yolov8n.pt"
 # Chemin poids : config par défaut, ou YOLO_WEIGHTS=yolov8n.pt pour COCO 80 classes
@@ -99,12 +106,14 @@ def health() -> dict[str, Any]:
         "depth_scale_default": DEPTH_SCALE_ENV,
         "engine": "PFE-Phase3-Hybrid",
         "mobilenet_v2": mobilenet_pipeline.status() if mobilenet_pipeline else {"enabled": False},
+        "groq": groq_status(),
     }
 
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
     use_gemini: str = Form("true"),
+    use_groq: str = Form("false"),
     detailed: str = Form("false"),
     hfov_deg: str | None = Form(None),
     depth_scale: str | None = Form(None),
@@ -167,10 +176,26 @@ async def predict(
     if mobilenet_pipeline:
         scene_list = mobilenet_pipeline.scene_top5(img)
         nav_mbv2 = mobilenet_pipeline.navigation(img, detections)
-    if not scene_list and os.environ.get("ENABLE_SCENE", "1").strip().lower() not in ("0", "false", "no", "off"):
+    if not scene_list and os.environ.get("ENABLE_SCENE", "0").strip().lower() not in ("0", "false", "no", "off"):
         scene_list = scene_top5_cached(img)
 
-    # Gemini (Optional translation)
+    # Groq + Llama 4 Scout — only when explicitly requested (e.g. Describe button).
+    if str(use_groq).strip().lower() in ("1", "true", "yes", "on"):
+        groq_result = run_groq_navigation(img, detections)
+    else:
+        groq_result = {
+            "scene": None,
+            "guidance_en": None,
+            "risk": None,
+            "focus": None,
+            "ms": 0.0,
+            "model": None,
+            "error": "Skipped (use_groq=false).",
+        }
+    if groq_result.get("scene") and not scene_list:
+        scene_list = [{"label": groq_result["scene"], "probability": 1.0}]
+
+    # Gemini sleeping by default — only runs when ENABLE_GEMINI=1 and use_gemini != false.
     if str(use_gemini).strip().lower() in ("0", "false", "no", "off"):
         gem = {
             "text": None,
@@ -178,6 +203,14 @@ async def predict(
             "risk": None,
             "focus": None,
             "error": "Skipped (client use_gemini=false).",
+        }
+    elif os.environ.get("ENABLE_GEMINI", "0").strip().lower() not in ("1", "true", "yes", "on"):
+        gem = {
+            "text": None,
+            "darija": None,
+            "risk": None,
+            "focus": None,
+            "error": "Gemini sleeping (ENABLE_GEMINI=0). Groq is main.",
         }
     else:
         gem = run_gemini(img, detections, scene_list, req_hfov, detailed=is_detailed)
@@ -189,6 +222,7 @@ async def predict(
         "inference_ms": round(yolo_ms, 2),
         "scene": {"top5": scene_list},
         "navigation_mobilenet_v2": nav_mbv2,
+        "groq": groq_result,
         "gemini": gem,
         "navigation": navigation,
         "pipeline_ms": round((time.perf_counter() - t0) * 1000.0, 2)

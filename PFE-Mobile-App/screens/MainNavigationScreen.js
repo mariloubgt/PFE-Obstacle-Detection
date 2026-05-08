@@ -158,7 +158,7 @@ export default function MainNavigationScreen({ navigation }) {
   const [detections, setDetections] = useState([]);
   const [inferenceMs, setInferenceMs] = useState(null);
   const [pipelineMs, setPipelineMs] = useState(null);
-  /** English context for UI + voice (Gemini focus or scene label). */
+  /** English context for UI + voice (MobileNet label or scene). */
   const [voiceContextHint, setVoiceContextHint] = useState(null);
   const [inferenceError, setInferenceError] = useState(null);
   const [volumeOpen, setVolumeOpen] = useState(false);
@@ -280,18 +280,21 @@ export default function MainNavigationScreen({ navigation }) {
       const data = await predictImage(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-        useGemini: true,
+        useGemini: false,
+        useGroq: true,
         detailed: true,
       });
-      const darija = typeof data?.gemini?.darija === 'string' ? data.gemini.darija.trim() : '';
-      const gemErr = data?.gemini?.error;
+      const groqScene = typeof data?.groq?.scene === 'string' ? data.groq.scene.trim() : '';
+      const groqGuidance = typeof data?.groq?.guidance_en === 'string' ? data.groq.guidance_en.trim() : '';
+      const groqErr = data?.groq?.error;
       const sceneFallback =
         typeof data?.scene?.top5?.[0]?.label === 'string'
           ? data.scene.top5[0].label.trim()
           : '';
-      const toSpeak = darija
+      const groqCombined = [groqScene, groqGuidance].filter(Boolean).join(' ').trim();
+      const toSpeak = groqCombined
         || sceneFallback
-        || (gemErr ? `Could not describe the scene. ${gemErr}` : 'No description available.');
+        || (groqErr ? `Could not describe the scene. ${groqErr}` : 'No description available.');
       Speech.stop();
       const vol = alertVolumeRef.current;
       Speech.speak(toSpeak, {
@@ -341,7 +344,7 @@ export default function MainNavigationScreen({ navigation }) {
     );
   }, [handsFreeDescribe]);
 
-  /** TTS: English obstacle line; prefers MobileNet nav, then LLaVA guidance, then obstacle fallback. */
+  /** TTS for AI test (obstacles only): MobileNet nav → LLaVA → obstacle phrase. No Groq here. */
   const speakEnglishNav = useCallback((data, smoothedDets) => {
     if (!smoothedDets.length) return;
     const now = Date.now();
@@ -352,10 +355,8 @@ export default function MainNavigationScreen({ navigation }) {
     const d0 = sorted[0];
     const dist = Math.round((d0.distance_m || 0) * 2) / 2;
     const label = englishLabelForClass(d0.name);
-    const labelSent =
-      label.charAt(0).toUpperCase() + label.slice(1);
+    const labelSent = label.charAt(0).toUpperCase() + label.slice(1);
     const unit = dist === 1 ? 'meter' : 'meters';
-
     const obstaclePart = `${labelSent} at ${dist} ${unit}.`;
 
     const mbv2Label =
@@ -367,6 +368,7 @@ export default function MainNavigationScreen({ navigation }) {
       typeof data?.navigation?.guidance_en === 'string'
         ? data.navigation.guidance_en.trim()
         : '';
+
     const msg = mbv2Speech
       ? clipSceneForSpeech(mbv2Speech)
       : navGuidance
@@ -381,7 +383,7 @@ export default function MainNavigationScreen({ navigation }) {
       ? `nav|${msg}`
       : `${label}|${dist}`;
     if (obKey === lastTtsKeyRef.current) return;
-    
+
     lastTtsKeyRef.current = obKey;
     lastSpeakAtRef.current = now;
     Speech.stop();

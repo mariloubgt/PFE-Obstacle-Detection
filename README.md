@@ -113,5 +113,65 @@ The `/predict` response now includes:
 
 ---
 
+## Groq + Llama 4 Scout (Main Multimodal Path)
+
+The default inference path now uses **Groq Cloud** with the multimodal **Llama 4 Scout** model
+for both scene understanding and short navigation guidance. Gemini and LLaVA are kept as
+optional fallbacks but are **disabled by default** when Groq is active.
+
+### 1) Get a free API key
+
+1. Go to https://console.groq.com.
+2. Create a key.
+3. Set it on your PC.
+
+```bash
+set GROQ_API_KEY=gsk_xxx
+set ENABLE_GROQ=1
+```
+
+Optional tuning (defaults shown):
+
+```bash
+set GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
+set GROQ_TIMEOUT_S=4.0
+set GROQ_MIN_INTERVAL_S=1.0
+set GROQ_IMAGE_MAX_SIDE=640
+set GROQ_JPEG_QUALITY=70
+```
+
+### 2) Wake/sleep the other engines
+
+By default, `inference_server.py` sets:
+
+```
+ENABLE_GEMINI=0
+ENABLE_LLAVA_NAV=0
+ENABLE_SCENE=0
+```
+
+To wake an engine again, set `ENABLE_GEMINI=1` (or the others) before starting.
+
+### 3) Response shape
+
+`POST /predict` now returns a `groq` block:
+
+```json
+"groq": {
+  "scene": "...",
+  "guidance_en": "...",
+  "risk": "danger | caution | ok",
+  "focus": "...",
+  "ms": 480.12,
+  "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+  "error": null
+}
+```
+
+The mobile app prefers `groq.guidance_en` for spoken guidance, then falls back to
+MobileNetV2 navigation, then to LLaVA, then to a local obstacle phrase.
+
+---
+
 ## 📜 Credits
 Developed as a PFE (Final Year Project) for obstacle detection and scene understanding using deep learning and multimodal AI.
