@@ -8,6 +8,8 @@ import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
+import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
+import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
 
 const DANGER = {
   bg: '#1a0a0a',
@@ -28,6 +30,15 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
   const lastShakeAt = useRef(0);
   const lastMagnitude = useRef(0);
 
+  useEffect(() => {
+    void syncStoredAlertVolumeToSystem();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    void syncStoredAlertVolumeToSystem();
+  }, [visible]);
+
   const runRepeat = useCallback(() => {
     const now = Date.now();
     if (now - lastShakeAt.current < SHAKE_COOLDOWN_MS) return;
@@ -39,6 +50,7 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
     Speech.speak(alertMessage, {
       language: 'en-US',
       rate: 0.95,
+      ...ttsVolumeOptions(),
     });
   }, [alertMessage]);
 

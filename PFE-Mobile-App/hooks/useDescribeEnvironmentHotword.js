@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 import * as Speech from 'expo-speech';
 import { useIsFocused } from '@react-navigation/native';
 
+import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
+
 const PHRASE_COOLDOWN_MS = 4500;
 const RESTART_AFTER_DESCRIBE_MS = 5200;
 
@@ -98,12 +100,7 @@ export function useDescribeEnvironmentHotword({
     /** listening session active (waiting for transcripts) */
     let sessionActive = false;
 
-    const volOpts = () => {
-      const v = alertVolumeRef?.current ?? 0.85;
-      return Platform.OS === 'ios'
-        ? { volume: Math.min(1, Math.max(0.15, v)) }
-        : {};
-    };
+    const volOpts = () => ttsVolumeOptions(alertVolumeRef?.current ?? 0.85);
 
     const resumePreviewSafely = () => {
       try {

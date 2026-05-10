@@ -12,7 +12,9 @@ import { FONTS } from '../constants/typography';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { predictImage } from '../services/predict';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
+import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
+import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back' };
@@ -46,12 +48,14 @@ export default function SceneQueryScreen({ navigation }) {
     { id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() },
   ]);
   const [isTyping, setIsTyping] = useState(false);
+  const alertVolumeRef = useRef(0.8);
 
   const speakReply = useCallback((text) => {
     Speech.stop();
     Speech.speak(text, {
       language: 'en-US',
       rate: 0.92,
+      ...ttsVolumeOptions(alertVolumeRef.current),
     });
   }, []);
 
@@ -105,6 +109,7 @@ export default function SceneQueryScreen({ navigation }) {
       Speech.speak('Describing.', {
         language: 'en-US',
         rate: 0.92,
+        ...ttsVolumeOptions(alertVolumeRef.current),
       });
 
       let granted = camPermission?.granted === true;
@@ -231,10 +236,13 @@ export default function SceneQueryScreen({ navigation }) {
     },
   });
 
-  // Refresh camera permission + hardware-action pref each time screen comes into view.
+  // Refresh camera permission + prefs + alert TTS volume each time screen comes into view.
   useFocusEffect(
     useCallback(() => {
       void refreshCamPermission();
+      void syncStoredAlertVolumeToSystem().then((v) => {
+        alertVolumeRef.current = v;
+      });
       void loadAppPreferences().then((p) => {
         setVolumeHardwareAction(p.volumeHardwareAction);
       });

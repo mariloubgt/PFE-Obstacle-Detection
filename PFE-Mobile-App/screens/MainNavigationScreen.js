@@ -26,7 +26,9 @@ import { predictImage } from '../services/predict';
 import { COLORS } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
-import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
+import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
+import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
+import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
 import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
@@ -207,13 +209,17 @@ export default function MainNavigationScreen({ navigation }) {
     refreshPredictOpts();
   }, [refreshPredictOpts]);
 
+  // --- Volume: persist + drive real device output (same as side buttons) ---
+  useEffect(() => {
+    syncStoredAlertVolumeToSystem().then((v) => setAlertVolume(v));
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       refreshPredictOpts();
+      void syncStoredAlertVolumeToSystem().then((v) => setAlertVolume(v));
     }, [refreshPredictOpts])
   );
-
-  // --- Clock ---
   useEffect(() => {
     const tick = () => setClock(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     tick();
@@ -221,19 +227,19 @@ export default function MainNavigationScreen({ navigation }) {
     return () => clearInterval(id);
   }, []);
 
-  // --- Volume ---
-  useEffect(() => {
-    loadAlertVolume().then(v => { if (v != null) setAlertVolume(v); });
-  }, []);
-
   useEffect(() => {
     alertVolumeRef.current = alertVolume;
   }, [alertVolume]);
 
-  const persistVolume = (v) => {
+  const onAlertVolumeSliderChange = useCallback((v) => {
+    setAlertVolume(v);
+    void applyAlertVolumeToSystemOutput(v);
+  }, []);
+
+  const onAlertVolumeSliderComplete = useCallback((v) => {
     setAlertVolume(v);
     void saveAlertVolume(v);
-  };
+  }, []);
 
   useEffect(() => {
     aiTestRef.current = aiTestEnabled;
@@ -247,9 +253,7 @@ export default function MainNavigationScreen({ navigation }) {
     Speech.speak('Navigation activated.', {
       language: 'en-US',
       rate: 0.92,
-      ...(Platform.OS === 'ios' && {
-        volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
-      }),
+      ...ttsVolumeOptions(alertVolumeRef.current),
     });
   }, []);
 
@@ -261,9 +265,7 @@ export default function MainNavigationScreen({ navigation }) {
     Speech.speak('Navigation stopped.', {
       language: 'en-US',
       rate: 0.92,
-      ...(Platform.OS === 'ios' && {
-        volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
-      }),
+      ...ttsVolumeOptions(alertVolumeRef.current),
     });
   }, []);
 
@@ -306,9 +308,7 @@ export default function MainNavigationScreen({ navigation }) {
       {
         language: 'en-US',
         rate: 0.92,
-        ...(Platform.OS === 'ios' && {
-          volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
-        }),
+        ...ttsVolumeOptions(alertVolumeRef.current),
       }
     );
   }, [handsFreeDescribe]);
@@ -347,14 +347,11 @@ export default function MainNavigationScreen({ navigation }) {
     lastTtsKeyRef.current = obKey;
     lastSpeakAtRef.current = now;
     Speech.stop();
-    const vol = alertVolumeRef.current;
     Speech.speak(msg, {
       language: 'en-US',
       rate: 0.9,
       pitch: 1.0,
-      ...(Platform.OS === 'ios' && {
-        volume: Math.min(1, Math.max(0.15, vol)),
-      }),
+      ...ttsVolumeOptions(alertVolumeRef.current),
     });
   }, []);
 
@@ -398,9 +395,7 @@ export default function MainNavigationScreen({ navigation }) {
       language: 'en-US',
       rate: 0.95,
       pitch: 1.05,
-      ...(Platform.OS === 'ios' && {
-        volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
-      }),
+      ...ttsVolumeOptions(alertVolumeRef.current),
     });
     return true;
   }, []);
@@ -443,9 +438,7 @@ export default function MainNavigationScreen({ navigation }) {
       Speech.speak(guidance, {
         language: 'en-US',
         rate: 0.92,
-        ...(Platform.OS === 'ios' && {
-          volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
-        }),
+        ...ttsVolumeOptions(alertVolumeRef.current),
       });
     } catch {
       // ignore — nav is best-effort
@@ -597,9 +590,7 @@ export default function MainNavigationScreen({ navigation }) {
               Speech.speak(next ? 'Navigation activated.' : 'Navigation stopped.', {
                 language: 'en-US',
                 rate: 0.92,
-                ...(Platform.OS === 'ios' && {
-                  volume: Math.min(1, Math.max(0.15, alertVolumeRef.current)),
-                }),
+                ...ttsVolumeOptions(alertVolumeRef.current),
               });
             }}
             accessibilityRole="button"
@@ -798,9 +789,13 @@ export default function MainNavigationScreen({ navigation }) {
             <Slider 
                style={{width:'100%', height:40}} 
                value={alertVolume} 
-               onValueChange={persistVolume} 
+               onValueChange={onAlertVolumeSliderChange}
+               onSlidingComplete={onAlertVolumeSliderComplete}
+               minimumValue={0}
+               maximumValue={1}
                minimumTrackTintColor={COLORS.teal}
                maximumTrackTintColor={COLORS.borderMuted}
+               thumbTintColor={COLORS.teal}
             />
             <TouchableOpacity style={styles.modalDone} onPress={() => setVolumeOpen(false)}>
               <Text style={styles.modalDoneText}>DONE</Text>

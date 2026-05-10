@@ -22,6 +22,7 @@ import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl, saveInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
+import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
 import {
   loadSpeechRate,
   saveSpeechRate,
@@ -259,7 +260,7 @@ export default function SettingsScreen({ navigation }) {
         <Section label="Audio">
           <ValueRow
             title="Alert Volume"
-            subtitle="Spoken obstacle warnings"
+            subtitle="Same level as the phone’s volume buttons — for all spoken guidance"
             value={`${Math.round(vol * 100)}%`}
             onPress={() => setVolOpen(true)}
           />
@@ -321,7 +322,7 @@ export default function SettingsScreen({ navigation }) {
         <Section label="Accessibility">
           <ValueRow
             title="Physical volume buttons"
-            subtitle="On the live navigation screen: describe, scene chat, or off"
+            subtitle="Up/down runs describe; device volume unchanged. Speech loudness: Alert volume"
             value={volumeHardwareRowLabel(volumeHw)}
             onPress={() => setVolumeHwOpen(true)}
           />
@@ -417,14 +418,18 @@ export default function SettingsScreen({ navigation }) {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Alert volume</Text>
             <Text style={styles.modalHint}>
-              Spoken obstacle warnings — {Math.round(vol * 100)}%
+              Sets the phone’s media/output level (same as the side volume buttons). Spoken guidance uses
+              this level — {Math.round(vol * 100)}%
             </Text>
             <Slider
               style={styles.modalSlider}
               minimumValue={0}
               maximumValue={1}
               value={vol}
-              onValueChange={setVol}
+              onValueChange={(v) => {
+                setVol(v);
+                void applyAlertVolumeToSystemOutput(v);
+              }}
               onSlidingComplete={async (v) => setVol(await saveAlertVolume(v))}
               minimumTrackTintColor={COLORS.teal}
               maximumTrackTintColor={COLORS.borderMuted}
@@ -577,7 +582,10 @@ export default function SettingsScreen({ navigation }) {
         <Pressable style={styles.modalBackdrop} onPress={() => setVolumeHwOpen(false)}>
           <View style={styles.pickerCard}>
             <Text style={styles.modalTitle}>Physical volume buttons</Text>
-            <Text style={styles.modalHint}>When you are on the live navigation camera screen</Text>
+            <Text style={styles.modalHint}>
+              Volume up or down triggers your chosen action; the music/output level is restored so keys do
+              not turn the sound up or down. For spoken alert loudness, use Alert volume in Settings.
+            </Text>
             {VOLUME_HW_OPTIONS.map((o) => (
               <Pressable
                 key={o.value}

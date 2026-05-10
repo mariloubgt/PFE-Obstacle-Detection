@@ -4,6 +4,7 @@ import * as Speech from 'expo-speech';
 import { useIsFocused } from '@react-navigation/native';
 import { postNavigationGuidance } from '../services/navigationGuidanceApi';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
+import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
 
 const ACTIVATE_COOLDOWN_MS = 3800;
 const STOP_COOLDOWN_MS = 2000;
@@ -42,10 +43,7 @@ export function matchesStopNavigation(text) {
 }
 
 function volFromRef(alertVolumeRef) {
-  const v = alertVolumeRef?.current ?? 0.85;
-  return Platform.OS === 'ios'
-    ? { volume: Math.min(1, Math.max(0.15, v)) }
-    : {};
+  return ttsVolumeOptions(alertVolumeRef?.current ?? 0.85);
 }
 
 /**

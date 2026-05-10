@@ -8,7 +8,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
 import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
-import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
+import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
+import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
 import { loadSpeechRate, saveSpeechRate } from '../utils/appSettings';
 
 export default function LanguageVoiceScreen({ navigation }) {
@@ -17,9 +18,7 @@ export default function LanguageVoiceScreen({ navigation }) {
   const [volume, setVolume] = useState(0.66);
 
   const reloadPrefs = useCallback(() => {
-    loadAlertVolume().then((v) => {
-      if (v != null) setVolume(v);
-    });
+    syncStoredAlertVolumeToSystem().then((v) => setVolume(v));
     loadSpeechRate().then((r) => {
       if (r != null) setSpeechRate(r);
     });
@@ -97,7 +96,10 @@ export default function LanguageVoiceScreen({ navigation }) {
           minimumValue={0}
           maximumValue={1}
           value={volume}
-          onValueChange={setVolume}
+          onValueChange={(v) => {
+            setVolume(v);
+            void applyAlertVolumeToSystemOutput(v);
+          }}
           onSlidingComplete={onAlertVolumeComplete}
           minimumTrackTintColor={COLORS.teal}
           maximumTrackTintColor={COLORS.borderMuted}
