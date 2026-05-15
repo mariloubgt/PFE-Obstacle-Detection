@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "PFE-Mobile-App",
+    "name": "VisionAid",
     "slug": "PFE-Mobile-App",
     "version": "1.0.0",
     "jsEngine": "jsc",
@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0D1117"
     },
     "ios": {
       "supportsTablet": true,
@@ -28,7 +28,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0D1117"
       },
       "edgeToEdgeEnabled": true,
       "usesCleartextTraffic": true,

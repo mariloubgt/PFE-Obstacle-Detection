@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -44,15 +45,17 @@ export default function WelcomeScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        <View
-          style={styles.logoBox}
-          accessibilityLabel="App logo — placeholder for future artwork"
+        <Image
+          source={require('../assets/branding/logo.png')}
+          style={styles.logoImage}
+          resizeMode="contain"
+          accessibilityRole="image"
+          accessibilityLabel="VisionAid — assistive navigation app logo"
         />
 
-        <View
-          style={styles.appNamePlaceholder}
-          accessibilityLabel="App name — placeholder for future title"
-        />
+        <Text style={styles.appName} accessibilityRole="header">
+          VisionAid
+        </Text>
 
         <Text style={styles.taglineEn}>
           Assistive Navigation System for Visually Impaired People
@@ -115,26 +118,26 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 28,
   },
-  logoBox: {
+  logoImage: {
     alignSelf: 'center',
     width: '100%',
     maxWidth: LAYOUT.logoBoxMaxWidth,
     height: LAYOUT.logoBoxHeight,
-    borderRadius: LAYOUT.cardRadius,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: COLORS.borderMuted,
-    backgroundColor: 'rgba(15, 23, 42, 0.35)',
-    marginBottom: 20,
-  },
-  appNamePlaceholder: {
-    alignSelf: 'center',
-    width: '100%',
-    maxWidth: 280,
-    minHeight: LAYOUT.appNameBlockMinHeight,
     marginBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderMuted,
+    borderRadius: LAYOUT.cardRadius,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  appName: {
+    textAlign: 'center',
+    color: COLORS.white,
+    fontSize: 28,
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    fontFamily: FONTS.en.extrabold,
   },
   taglineEn: {
     textAlign: 'center',
