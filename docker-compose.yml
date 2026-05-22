@@ -1,0 +1,16 @@
+# VisionAid API — déploiement simple sur VPS.
+#
+# 1. Copier api/env.example vers .env à la racine du repo et renseigner GROQ_API_KEY (etc.).
+# 2. Sur le serveur : docker compose up -d --build
+# 3. Reverse proxy HTTPS (Caddy ou nginx + Let's Encrypt) vers le port 8787.
+#
+services:
+  visionaid-api:
+    build: .
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    environment:
+      PORT: "8787"
+    restart: unless-stopped

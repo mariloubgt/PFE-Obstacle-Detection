@@ -11,7 +11,9 @@ import {
   DEPTH_SCALE_KEY,
   VOLUME_HARDWARE_ACTION_KEY,
   HANDS_FREE_DESCRIBE_KEY,
+  APPEARANCE_MODE_KEY,
 } from '../constants/storageKeys';
+import { APPEARANCE } from '../constants/theme';
 
 export const DEFAULTS = {
   speechRate: 0.6,
@@ -32,6 +34,8 @@ export const DEFAULTS = {
   volumeHardwareAction: 'describe',
   /** When true, listen for the phrase "describe environment" on the nav screen (uses speech recognition + may pause camera briefly). */
   handsFreeDescribe: false,
+  /** Display: night_shift (dark) or white_shift (light) */
+  appearanceMode: APPEARANCE.night_shift,
 };
 
 function parseBool(v, d) {
@@ -239,6 +243,31 @@ export async function saveVolumeHardwareAction(action) {
   const x = normalizeVolumeHardwareAction(String(action));
   try {
     await AsyncStorage.setItem(VOLUME_HARDWARE_ACTION_KEY, x);
+  } catch {
+    /* ignore */
+  }
+  return x;
+}
+
+function normalizeAppearance(raw) {
+  const s = String(raw || '').trim();
+  if (s === APPEARANCE.white_shift) return APPEARANCE.white_shift;
+  return APPEARANCE.night_shift;
+}
+
+export async function loadAppearanceMode() {
+  try {
+    const v = await AsyncStorage.getItem(APPEARANCE_MODE_KEY);
+    return normalizeAppearance(v);
+  } catch {
+    return DEFAULTS.appearanceMode;
+  }
+}
+
+export async function saveAppearanceMode(mode) {
+  const x = normalizeAppearance(mode);
+  try {
+    await AsyncStorage.setItem(APPEARANCE_MODE_KEY, x);
   } catch {
     /* ignore */
   }

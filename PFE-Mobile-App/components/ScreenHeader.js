@@ -1,6 +1,7 @@
+import { useMemo } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { COLORS } from '../constants/theme';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { FONTS } from '../constants/typography';
 
 /**
@@ -9,6 +10,55 @@ import { FONTS } from '../constants/typography';
  * @param {boolean} [circularBack] — pill-style back control
  */
 export default function ScreenHeader({ title, subtitle, onBack, showBack = true, circularBack = false }) {
+  const themeColors = useThemeColors();
+  const styles = useMemo(
+    () =>
+      StyleSheet.create({
+        row: {
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingHorizontal: 8,
+          paddingVertical: 4,
+          marginBottom: 4,
+        },
+        backBtn: {
+          padding: 4,
+          width: 44,
+        },
+        backBtnCircle: {
+          width: 44,
+          height: 44,
+          borderRadius: 22,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: themeColors.headerBackCircle,
+        },
+        backPlaceholder: {
+          width: 44,
+        },
+        titleBlock: {
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+        title: {
+          textAlign: 'center',
+          color: themeColors.text,
+          fontSize: 17,
+          fontFamily: FONTS.en.semibold,
+        },
+        subtitle: {
+          marginTop: 2,
+          textAlign: 'center',
+          color: themeColors.teal,
+          fontSize: 13,
+          fontFamily: FONTS.en.medium,
+        },
+      }),
+    [themeColors]
+  );
+
   return (
     <View style={styles.row}>
       {showBack ? (
@@ -19,7 +69,7 @@ export default function ScreenHeader({ title, subtitle, onBack, showBack = true,
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
-          <MaterialCommunityIcons name="chevron-left" size={28} color={COLORS.teal} />
+          <MaterialCommunityIcons name="chevron-left" size={28} color={themeColors.teal} />
         </Pressable>
       ) : (
         <View style={styles.backPlaceholder} />
@@ -42,47 +92,3 @@ export default function ScreenHeader({ title, subtitle, onBack, showBack = true,
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginBottom: 4,
-  },
-  backBtn: {
-    padding: 4,
-    width: 44,
-  },
-  backBtnCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(102, 210, 177, 0.12)',
-  },
-  backPlaceholder: {
-    width: 44,
-  },
-  titleBlock: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  title: {
-    textAlign: 'center',
-    color: COLORS.white,
-    fontSize: 17,
-    fontFamily: FONTS.en.semibold,
-  },
-  subtitle: {
-    marginTop: 2,
-    textAlign: 'center',
-    color: COLORS.teal,
-    fontSize: 13,
-    fontFamily: FONTS.en.medium,
-  },
-});

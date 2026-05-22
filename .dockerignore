@@ -1,0 +1,14 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+*.ipynb
+.env
+.env.*
+!.env.example
+
+PFE-Mobile-App/node_modules
+PFE-Mobile-App/.expo
+benchmark_indoor/runs

@@ -1,11 +1,43 @@
+import { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { COLORS } from '../constants/theme';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { FONTS } from '../constants/typography';
 
 /**
  * Normalized boxes (0–1) from /predict, laid over the camera preview.
  */
 export default function DetectionOverlay({ detections = [] }) {
+  const colors = useThemeColors();
+  const styles = useMemo(
+    () =>
+      StyleSheet.create({
+        layer: {
+          ...StyleSheet.absoluteFillObject,
+        },
+        box: {
+          position: 'absolute',
+          borderWidth: 2,
+          borderColor: colors.teal,
+          borderRadius: 4,
+          backgroundColor: colors.detectionBoxFill,
+        },
+        label: {
+          position: 'absolute',
+          top: -18,
+          left: -2,
+          backgroundColor: colors.detectionLabelBg,
+          color: colors.tealBright,
+          fontSize: 10,
+          fontFamily: FONTS.en.bold,
+          paddingHorizontal: 6,
+          paddingVertical: 2,
+          borderRadius: 4,
+          overflow: 'hidden',
+        },
+      }),
+    [colors]
+  );
+
   if (!detections.length) return null;
 
   return (
@@ -40,29 +72,3 @@ export default function DetectionOverlay({ detections = [] }) {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  layer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  box: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderColor: COLORS.teal,
-    borderRadius: 4,
-    backgroundColor: 'rgba(102, 210, 177, 0.1)',
-  },
-  label: {
-    position: 'absolute',
-    top: -18,
-    left: -2,
-    backgroundColor: 'rgba(13, 17, 23, 0.92)',
-    color: COLORS.tealBright,
-    fontSize: 10,
-    fontFamily: FONTS.en.bold,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-});

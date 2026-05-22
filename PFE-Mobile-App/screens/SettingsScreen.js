@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -18,8 +18,9 @@ import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
 import { fetchHealth } from '../services/predict';
-import { COLORS, LAYOUT } from '../constants/theme';
+import { APPEARANCE, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
+import { useAppTheme, useThemeColors } from '../contexts/ThemeContext';
 import { loadInferenceApiUrl, saveInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { loadAlertVolume, saveAlertVolume } from '../utils/alertVolumeStorage';
 import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
@@ -107,11 +108,16 @@ function volumeHardwareRowLabel(action) {
   return hit?.label ?? 'Describe environment';
 }
 
-function InsetDivider() {
+const APPEARANCE_OPTIONS = [
+  { value: APPEARANCE.night_shift, label: 'Night shift' },
+  { value: APPEARANCE.white_shift, label: 'White shift' },
+];
+
+function InsetDivider({ styles }) {
   return <View style={styles.insetDivider} />;
 }
 
-function Section({ label, children }) {
+function Section({ styles, label, children }) {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionLabel}>{label}</Text>
@@ -120,7 +126,7 @@ function Section({ label, children }) {
   );
 }
 
-function ValueRow({ title, subtitle, value, onPress, last }) {
+function ValueRow({ styles, title, subtitle, value, onPress, last }) {
   return (
     <Pressable
       onPress={onPress}
@@ -136,7 +142,7 @@ function ValueRow({ title, subtitle, value, onPress, last }) {
   );
 }
 
-function ToggleRow({ title, subtitle, value, onValueChange, last }) {
+function ToggleRow({ styles, colors, title, subtitle, value, onValueChange, last }) {
   return (
     <View style={[styles.valueRow, last && styles.valueRowLast]}>
       <View style={styles.valueRowText}>
@@ -146,14 +152,13 @@ function ToggleRow({ title, subtitle, value, onValueChange, last }) {
       <Switch
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: 'rgba(102, 210, 177, 0.15)', true: COLORS.teal }}
-        thumbColor={Platform.OS === 'ios' ? COLORS.white : COLORS.btnText}
-        ios_backgroundColor="rgba(102, 210, 177, 0.15)"
+        trackColor={{ false: colors.switchTrackOff, true: colors.teal }}
+        thumbColor={Platform.OS === 'ios' ? '#FFFFFF' : colors.btnText}
+        ios_backgroundColor={colors.switchTrackOff}
       />
     </View>
   );
 }
-
 export default function SettingsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const [apiUrl, setApiUrl] = useState('');
@@ -178,6 +183,11 @@ export default function SettingsScreen({ navigation }) {
   const [volumeHw, setVolumeHw] = useState(DEFAULTS.volumeHardwareAction);
   const [volumeHwOpen, setVolumeHwOpen] = useState(false);
   const [handsFreePhrase, setHandsFreePhrase] = useState(DEFAULTS.handsFreeDescribe);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+
+  const colors = useThemeColors();
+  const { appearance, setAppearance } = useAppTheme();
+  const styles = useMemo(() => createSettingsStyles(colors), [colors]);
 
   const loadAll = useCallback(async () => {
     setApiUrl(await loadInferenceApiUrl());
@@ -235,6 +245,8 @@ export default function SettingsScreen({ navigation }) {
   }, [apiUrl]);
 
   const speechLabel = snapSpeechLabel(speech).label;
+  const appearanceLabel =
+    appearance === APPEARANCE.white_shift ? 'White shift' : 'Night shift';
 
   return (
     <View
@@ -243,7 +255,7 @@ export default function SettingsScreen({ navigation }) {
         { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) },
       ]}
     >
-      <StatusBar style="light" />
+      <StatusBar style={colors.statusBarStyle} />
       <ScreenHeader
         title="Settings"
         subtitle="VisionAid v1.0.0 beta"
@@ -257,22 +269,37 @@ export default function SettingsScreen({ navigation }) {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Section label="Audio">
+        <Section styles={styles} label="Display">
           <ValueRow
+            styles={styles}
+            title="Night shift / White shift"
+            subtitle="Night shift — dark theme. White shift — bright theme for daytime."
+            value={appearanceLabel}
+            onPress={() => setAppearanceOpen(true)}
+            last
+          />
+        </Section>
+
+        <Section styles={styles} label="Audio">
+          <ValueRow
+            styles={styles}
             title="Alert Volume"
             subtitle="Same level as the phone’s volume buttons — for all spoken guidance"
             value={`${Math.round(vol * 100)}%`}
             onPress={() => setVolOpen(true)}
           />
-          <InsetDivider />
+          <InsetDivider styles={styles} />
           <ValueRow
+            styles={styles}
             title="Speech Rate"
             subtitle="English TTS speed"
             value={speechLabel}
             onPress={() => setSpeechOpen(true)}
           />
-          <InsetDivider />
+          <InsetDivider styles={styles} />
           <ToggleRow
+            styles={styles}
+            colors={colors}
             title="Vibration on Danger"
             last
             value={vib}
@@ -280,54 +307,66 @@ export default function SettingsScreen({ navigation }) {
           />
         </Section>
 
-        <Section label="Detection">
+        <Section styles={styles} label="Detection">
           <ValueRow
+            styles={styles}
             title="Danger Threshold"
             subtitle="Trigger distance for red alert"
             value={`${thr.toFixed(1)}m`}
             onPress={() => setThrOpen(true)}
           />
-          <InsetDivider />
+          <InsetDivider styles={styles} />
           <ValueRow
+            styles={styles}
             title="Frame Rate"
             subtitle="YOLO processing speed"
             value={formatFrameValue(frameMs)}
             onPress={() => setFrameOpen(true)}
           />
-          <InsetDivider />
+          <InsetDivider styles={styles} />
           <ToggleRow
+            styles={styles}
+            colors={colors}
             title="Low-light Mode"
-            subtitle="Auto-detect poor visibility"
+            subtitle="When AI navigation starts on rear camera, turn torch on (you can turn it off anytime)"
             last
             value={lowLight}
             onValueChange={async (b) => setLowLight(await saveLowLight(b))}
           />
         </Section>
 
-        <Section label="Voice">
+        <Section styles={styles} label="Voice">
           <ValueRow
-            title="Speech Language"
-            value="English"
+            styles={styles}
+            title="Speech rate & alert volume"
+            subtitle="English only · advanced sliders"
+            value="Adjust"
             onPress={() => navigation.navigate('LanguageVoice')}
           />
-          <InsetDivider />
+          <InsetDivider styles={styles} />
           <ToggleRow
+            styles={styles}
+            colors={colors}
             title="Internet for Gemini"
+            subtitle="Adds use_gemini on predict requests when your PC server supports it"
             last
             value={gem}
             onValueChange={async (b) => setGem(await saveInternetGemini(b))}
           />
         </Section>
 
-        <Section label="Accessibility">
+        <Section styles={styles} label="Accessibility">
           <ValueRow
+            styles={styles}
             title="Physical volume buttons"
             subtitle="Up/down runs describe; device volume unchanged. Speech loudness: Alert volume"
             value={volumeHardwareRowLabel(volumeHw)}
             onPress={() => setVolumeHwOpen(true)}
           />
-          <InsetDivider />
+          <InsetDivider styles={styles} />
           <ToggleRow
+            styles={styles}
+            colors={colors}
             title="Hands-free phrase"
             subtitle="Say describe environment — requires mic; may briefly pause preview"
             value={handsFreePhrase}
@@ -349,7 +388,7 @@ export default function SettingsScreen({ navigation }) {
             value={apiUrl}
             onChangeText={setApiUrl}
             placeholder="http://192.168.x.x:8787"
-            placeholderTextColor={COLORS.greyDark}
+            placeholderTextColor={colors.greyDark}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
@@ -364,7 +403,7 @@ export default function SettingsScreen({ navigation }) {
               disabled={testing}
             >
               {testing ? (
-                <ActivityIndicator color={COLORS.btnText} size="small" />
+                <ActivityIndicator color={colors.btnText} size="small" />
               ) : (
                 <Text style={styles.smallBtnTextDark}>Test connection</Text>
               )}
@@ -378,13 +417,15 @@ export default function SettingsScreen({ navigation }) {
           </Text>
           <View style={[styles.card, { marginTop: 10 }]}>
             <ValueRow
+              styles={styles}
               title="Camera horizontal FOV"
               subtitle="Degrees — typical phone 52–72"
               value={`${Math.round(hfovDeg)}°`}
               onPress={() => setHfovOpen(true)}
             />
-            <InsetDivider />
+            <InsetDivider styles={styles} />
             <ValueRow
+              styles={styles}
               title="Distance scale"
               subtitle="Multiply depth (0.5–2). Default 1.0"
               value={`${depthScale.toFixed(2)}×`}
@@ -399,17 +440,16 @@ export default function SettingsScreen({ navigation }) {
             style={({ pressed }) => [styles.navRow, styles.navRowLast, pressed && styles.pressed]}
             onPress={() => navigation.navigate('Permissions')}
           >
-            <MaterialCommunityIcons name="shield-check-outline" size={22} color={COLORS.teal} />
+            <MaterialCommunityIcons name="shield-check-outline" size={22} color={colors.teal} />
             <Text style={styles.navRowText}>App permissions</Text>
-            <MaterialCommunityIcons name="chevron-right" size={22} color={COLORS.grey} />
+            <MaterialCommunityIcons name="chevron-right" size={22} color={colors.grey} />
           </Pressable>
         </View>
 
         <Text style={styles.hint}>
           On the navigation screen, use Physical volume buttons (above) instead of locating the Describe
           control. Hands-free listens for describe environment — turn off if preview should never pause.
-          Use the Volume control below for obstacle alert loudness. “Internet for Gemini” uses your
-          server when the PC allows cloud enrichment on the inference request.
+          Use the Volume control below for obstacle alert loudness. “Internet for Gemini” tells the PC to run Gemini enrichment when the server has a key (same toggle exists under App permissions).
         </Text>
       </ScrollView>
 
@@ -431,9 +471,9 @@ export default function SettingsScreen({ navigation }) {
                 void applyAlertVolumeToSystemOutput(v);
               }}
               onSlidingComplete={async (v) => setVol(await saveAlertVolume(v))}
-              minimumTrackTintColor={COLORS.teal}
-              maximumTrackTintColor={COLORS.borderMuted}
-              thumbTintColor={COLORS.teal}
+              minimumTrackTintColor={colors.teal}
+              maximumTrackTintColor={colors.borderMuted}
+              thumbTintColor={colors.teal}
             />
             <View style={styles.modalEnds}>
               <Text style={styles.endLabel}>0%</Text>
@@ -460,9 +500,9 @@ export default function SettingsScreen({ navigation }) {
               value={thr}
               onValueChange={setThr}
               onSlidingComplete={async (v) => setThr(await saveDangerThresholdM(v))}
-              minimumTrackTintColor={COLORS.teal}
-              maximumTrackTintColor={COLORS.borderMuted}
-              thumbTintColor={COLORS.teal}
+              minimumTrackTintColor={colors.teal}
+              maximumTrackTintColor={colors.borderMuted}
+              thumbTintColor={colors.teal}
             />
             <View style={styles.modalEnds}>
               <Text style={styles.endLabel}>0.2m</Text>
@@ -504,7 +544,7 @@ export default function SettingsScreen({ navigation }) {
                   {o.label}
                 </Text>
                 {o.value === snapSpeechLabel(speech).value ? (
-                  <MaterialCommunityIcons name="check" size={22} color={COLORS.teal} />
+                  <MaterialCommunityIcons name="check" size={22} color={colors.teal} />
                 ) : null}
               </Pressable>
             ))}
@@ -528,9 +568,9 @@ export default function SettingsScreen({ navigation }) {
               value={hfovDeg}
               onValueChange={setHfovDeg}
               onSlidingComplete={async (v) => setHfovDeg(await saveCameraHfovDeg(v))}
-              minimumTrackTintColor={COLORS.teal}
-              maximumTrackTintColor={COLORS.borderMuted}
-              thumbTintColor={COLORS.teal}
+              minimumTrackTintColor={colors.teal}
+              maximumTrackTintColor={colors.borderMuted}
+              thumbTintColor={colors.teal}
             />
             <View style={styles.modalEnds}>
               <Text style={styles.endLabel}>40°</Text>
@@ -558,9 +598,9 @@ export default function SettingsScreen({ navigation }) {
               value={depthScale}
               onValueChange={setDepthScale}
               onSlidingComplete={async (v) => setDepthScale(await saveDepthScale(v))}
-              minimumTrackTintColor={COLORS.teal}
-              maximumTrackTintColor={COLORS.borderMuted}
-              thumbTintColor={COLORS.teal}
+              minimumTrackTintColor={colors.teal}
+              maximumTrackTintColor={colors.borderMuted}
+              thumbTintColor={colors.teal}
             />
             <View style={styles.modalEnds}>
               <Text style={styles.endLabel}>0.5×</Text>
@@ -600,7 +640,7 @@ export default function SettingsScreen({ navigation }) {
                   {o.label}
                 </Text>
                 {o.value === volumeHw ? (
-                  <MaterialCommunityIcons name="check" size={22} color={COLORS.teal} />
+                  <MaterialCommunityIcons name="check" size={22} color={colors.teal} />
                 ) : null}
               </Pressable>
             ))}
@@ -629,7 +669,43 @@ export default function SettingsScreen({ navigation }) {
                   {p.label}
                 </Text>
                 {p.ms === frameMs ? (
-                  <MaterialCommunityIcons name="check" size={22} color={COLORS.teal} />
+                  <MaterialCommunityIcons name="check" size={22} color={colors.teal} />
+                ) : null}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={appearanceOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAppearanceOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setAppearanceOpen(false)}>
+          <View style={styles.pickerCard}>
+            <Text style={styles.modalTitle}>Screen appearance</Text>
+            <Text style={styles.modalHint}>Night shift (dark) or White shift (light)</Text>
+            {APPEARANCE_OPTIONS.map((o) => (
+              <Pressable
+                key={o.value}
+                style={({ pressed }) => [styles.pickerRow, pressed && styles.pressed]}
+                onPress={async () => {
+                  await setAppearance(o.value);
+                  setAppearanceOpen(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.pickerLabel,
+                    o.value === appearance && styles.pickerLabelOn,
+                  ]}
+                >
+                  {o.label}
+                </Text>
+                {o.value === appearance ? (
+                  <MaterialCommunityIcons name="check" size={22} color={colors.teal} />
                 ) : null}
               </Pressable>
             ))}
@@ -640,10 +716,11 @@ export default function SettingsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+function createSettingsStyles(colors) {
+  return StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: COLORS.bg,
+    backgroundColor: colors.bg,
     paddingHorizontal: LAYOUT.screenPaddingH,
   },
   scroll: { flex: 1 },
@@ -652,7 +729,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   sectionLabel: {
-    color: COLORS.teal,
+    color: colors.teal,
     fontSize: 12,
     fontFamily: FONTS.en.extrabold,
     letterSpacing: 1.2,
@@ -661,10 +738,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   card: {
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderRadius: LAYOUT.cardRadius,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
     overflow: 'hidden',
   },
   valueRow: {
@@ -681,37 +758,37 @@ const styles = StyleSheet.create({
   },
   valueRowText: { flex: 1, minWidth: 0 },
   rowTitle: {
-    color: COLORS.white,
+    color: colors.text,
     fontSize: 16,
     fontFamily: FONTS.en.semibold,
   },
   rowSubtitle: {
-    color: COLORS.grey,
+    color: colors.grey,
     fontSize: 12,
     marginTop: 4,
     fontFamily: FONTS.en.regular,
   },
   valueRight: {
-    color: COLORS.teal,
+    color: colors.teal,
     fontSize: 15,
     fontFamily: FONTS.en.semibold,
   },
   pressed: { opacity: 0.88 },
   insetDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: COLORS.borderMuted,
+    backgroundColor: colors.borderMuted,
     marginLeft: 16,
     marginRight: 16,
   },
   serverSection: { marginTop: 20 },
   serverTitle: {
-    color: COLORS.white,
+    color: colors.text,
     fontSize: 17,
     fontFamily: FONTS.en.extrabold,
     marginBottom: 8,
   },
   serverHint: {
-    color: COLORS.grey,
+    color: colors.grey,
     fontSize: 13,
     lineHeight: 20,
     marginBottom: 12,
@@ -719,17 +796,17 @@ const styles = StyleSheet.create({
   },
   mono: {
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-    color: COLORS.tealBright,
+    color: colors.tealBright,
     fontSize: 12,
   },
   input: {
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: COLORS.white,
+    color: colors.text,
     fontSize: 15,
     marginBottom: 12,
     fontFamily: FONTS.en.regular,
@@ -740,13 +817,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: COLORS.teal,
+    borderColor: colors.teal,
     alignItems: 'center',
   },
-  smallBtnPrimary: { backgroundColor: COLORS.teal, borderColor: COLORS.teal },
-  smallBtnText: { color: COLORS.teal, fontWeight: '700', fontSize: 15, fontFamily: FONTS.en.semibold },
-  smallBtnTextDark: { color: COLORS.btnText, fontWeight: '800', fontSize: 15, fontFamily: FONTS.en.extrabold },
-  testMsg: { color: COLORS.tealBright, fontSize: 13, marginBottom: 8, fontFamily: FONTS.en.regular },
+  smallBtnPrimary: { backgroundColor: colors.teal, borderColor: colors.teal },
+  smallBtnText: { color: colors.teal, fontWeight: '700', fontSize: 15, fontFamily: FONTS.en.semibold },
+  smallBtnTextDark: { color: colors.btnText, fontWeight: '800', fontSize: 15, fontFamily: FONTS.en.extrabold },
+  testMsg: { color: colors.tealBright, fontSize: 13, marginBottom: 8, fontFamily: FONTS.en.regular },
   navRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -757,13 +834,13 @@ const styles = StyleSheet.create({
   navRowLast: { paddingBottom: 18 },
   navRowText: {
     flex: 1,
-    color: COLORS.white,
+    color: colors.text,
     fontSize: 16,
     fontWeight: '600',
     fontFamily: FONTS.en.semibold,
   },
   hint: {
-    color: COLORS.grey,
+    color: colors.grey,
     fontSize: 13,
     lineHeight: 20,
     marginTop: 20,
@@ -777,45 +854,47 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalCard: {
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderRadius: 16,
     padding: 20,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
   },
   pickerCard: {
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderRadius: 16,
     padding: 16,
     paddingBottom: 8,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
   },
   modalTitle: {
-    color: COLORS.white,
+    color: colors.text,
     fontSize: 20,
     fontFamily: FONTS.en.extrabold,
     marginBottom: 6,
   },
   modalHint: {
-    color: COLORS.grey,
+    color: colors.grey,
     fontSize: 14,
     marginBottom: 16,
     fontFamily: FONTS.en.regular,
   },
   modalSlider: { width: '100%', height: 44 },
   modalEnds: { flexDirection: 'row', justifyContent: 'space-between', marginTop: -4, marginBottom: 16 },
-  endLabel: { color: COLORS.grey, fontSize: 12, fontFamily: FONTS.en.regular },
+  endLabel: { color: colors.grey, fontSize: 12, fontFamily: FONTS.en.regular },
   modalDone: { alignSelf: 'flex-end', paddingVertical: 10, paddingHorizontal: 16 },
-  modalDoneText: { color: COLORS.teal, fontSize: 17, fontFamily: FONTS.en.semibold },
+  modalDoneText: { color: colors.teal, fontSize: 17, fontFamily: FONTS.en.semibold },
   pickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.borderMuted,
+    borderBottomColor: colors.borderMuted,
   },
-  pickerLabel: { color: COLORS.white, fontSize: 16, fontFamily: FONTS.en.medium },
-  pickerLabelOn: { color: COLORS.teal, fontFamily: FONTS.en.semibold },
+  pickerLabel: { color: colors.text, fontSize: 16, fontFamily: FONTS.en.medium },
+  pickerLabelOn: { color: colors.teal, fontFamily: FONTS.en.semibold },
 });
+}
+

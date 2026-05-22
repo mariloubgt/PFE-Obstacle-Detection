@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import * as ExpoCamera from 'expo-camera';
 import * as Haptics from 'expo-haptics';
@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DangerAlertModal from '../components/DangerAlertModal';
 import DetectionOverlay from '../components/DetectionOverlay';
 import { predictImage } from '../services/predict';
-import { COLORS } from '../constants/theme';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
@@ -105,7 +105,6 @@ function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.45) {
   return lockedDet;
 }
 
-const FRAME_MS = 1500;
 const SPEAK_MIN_GAP_MS = 4000;
 const NAV_GROQ_INTERVAL_MS = 4000;
 /** Speak scene/caption again when text changes, at most every this many ms */
@@ -124,9 +123,130 @@ function formatMeters(m) {
   return `${Number(m).toFixed(1)} m`;
 }
 
+function createMainNavigationStyles(colors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, height: 60 },
+    topIcon: { padding: 4 },
+    time: { color: colors.topBarText, fontSize: 18, fontWeight: '700', letterSpacing: -0.5 },
+    topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    livePill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, gap: 6 },
+    liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444' },
+    liveText: { color: colors.topBarText, fontSize: 11, fontWeight: '800' },
+    aiPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 6, borderWidth: 1, borderColor: 'rgba(20,184,166,0.3)' },
+    aiPillOn: { backgroundColor: colors.teal, borderColor: colors.teal },
+    aiPillText: { color: colors.teal, fontSize: 12, fontWeight: '700' },
+    aiPillTextOn: { color: colors.btnText },
+    aiPillPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
+    visionArea: { flex: 1, marginHorizontal: 15, marginVertical: 10, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111' },
+    cameraTouchable: { flex: 1 },
+    tapFlash: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(255,255,255,0.22)',
+    },
+    flipBtn: {
+      position: 'absolute',
+      top: 12,
+      left: 12,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 20,
+    },
+    torchBtn: {
+      position: 'absolute',
+      top: 12,
+      right: 12,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 20,
+    },
+    riskStrip: { height: 4, marginHorizontal: 25, borderRadius: 2 },
+    alertCard: {
+      flexDirection: 'row',
+      margin: 20,
+      padding: 20,
+      backgroundColor: colors.alertCardBg,
+      borderRadius: 24,
+      alignItems: 'flex-start',
+      gap: 15,
+    },
+    alertCardIcon: { marginTop: 2 },
+    alertTextCol: { flex: 1, minWidth: 0 },
+    cardSectionLabel: {
+      color: colors.grey,
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 0.4,
+      textTransform: 'uppercase',
+      marginTop: 10,
+      marginBottom: 2,
+      fontFamily: FONTS.en.semibold,
+    },
+    cardSectionLabelFirst: { marginTop: 0 },
+    alertTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
+    alertSub: { color: colors.grey, fontSize: 13 },
+    voiceHint: { color: colors.tealBright, fontSize: 12, marginTop: 10, lineHeight: 18 },
+    voiceContextHint: {
+      color: colors.tealBright,
+      fontSize: 14,
+      fontWeight: '600',
+      marginTop: 2,
+      lineHeight: 20,
+      fontFamily: FONTS.en.regular,
+    },
+    sceneDistanceLine: {
+      color: colors.text,
+      fontSize: 13,
+      marginTop: 8,
+      fontFamily: FONTS.en.medium,
+    },
+    sceneDistanceEm: {
+      color: colors.tealBright,
+      fontWeight: '800',
+      fontFamily: FONTS.en.extrabold,
+    },
+    inferenceMeta: { color: colors.grey, fontSize: 11, marginTop: 2, lineHeight: 16 },
+    inferenceErr: { color: colors.danger, fontSize: 12 },
+    bottomNav: {
+      flexDirection: 'row',
+      justifyContent: 'space-around',
+      alignItems: 'center',
+      backgroundColor: colors.navBarBg,
+      paddingVertical: 10,
+      borderTopLeftRadius: 30,
+      borderTopRightRadius: 30,
+      zIndex: 100,
+      elevation: 24,
+    },
+    navItem: { alignItems: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 12 },
+    navPressed: { opacity: 0.72 },
+    navLabel: { color: colors.grey, fontSize: 10, fontWeight: '600' },
+    centerFab: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.teal, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: colors.teal, shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+    modalCard: { width: '80%', backgroundColor: colors.bgElevated, padding: 25, borderRadius: 30, alignItems: 'center' },
+    modalTitle: { color: colors.text, fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
+    modalDone: { marginTop: 20, backgroundColor: colors.teal, paddingHorizontal: 30, paddingVertical: 12, borderRadius: 15 },
+    modalDoneText: { color: colors.btnText, fontWeight: 'bold' },
+    placeholder: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center', padding: 40 },
+    placeholderTitle: { color: colors.text, fontSize: 18, marginVertical: 20, textAlign: 'center' },
+    allowBtn: { backgroundColor: colors.teal, paddingHorizontal: 25, paddingVertical: 15, borderRadius: 15 },
+    allowBtnText: { color: colors.btnText, fontWeight: 'bold' },
+  });
+}
+
 export default function MainNavigationScreen({ navigation }) {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => createMainNavigationStyles(colors), [colors]);
   const [permission, setPermission] = useState(null);
   const requestPermission = useCallback(async () => {
     const req =
@@ -156,6 +276,8 @@ export default function MainNavigationScreen({ navigation }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [alertVolume, setAlertVolume] = useState(0.8);
   const [dangerPayload, setDangerPayload] = useState(null);
+  /** YOLO loop interval — synced from Settings; changing while AI runs updates on next focus/refresh. */
+  const [yoloIntervalMs, setYoloIntervalMs] = useState(DEFAULTS.aiFrameMs);
   const [volumeHardwareAction, setVolumeHardwareAction] = useState(
     DEFAULTS.volumeHardwareAction
   );
@@ -179,6 +301,7 @@ export default function MainNavigationScreen({ navigation }) {
   const lastNavSpokenAtRef = useRef(0);
   const lastEmergencyAtRef = useRef(0);
   const smoothStateRef = useRef({});
+  const lastDangerHapticAtRef = useRef(0);
   const lastTtsKeyRef = useRef('');
   const lastSpeakAtRef = useRef(0);
   const lastSpokenSceneTextRef = useRef('');
@@ -187,22 +310,46 @@ export default function MainNavigationScreen({ navigation }) {
   const primaryLockRef = useRef(null);
   const manualSuppressRef = useRef(false);
   const alertVolumeRef = useRef(alertVolume);
-  const predictOptsRef = useRef({
-    hfovDeg: 56,
-    depthScale: 1,
-    useGemini: false,
+  /** Live prefs used inside async callbacks (always read `.current`, never stale closures). */
+  const livePrefsRef = useRef({
+    hfovDeg: DEFAULTS.cameraHfovDeg,
+    depthScale: DEFAULTS.depthScale,
+    useGemini: DEFAULTS.internetGemini,
+    dangerThresholdM: DEFAULTS.dangerThresholdM,
+    aiFrameMs: DEFAULTS.aiFrameMs,
+    vibrationDanger: DEFAULTS.vibrationDanger,
+    lowLight: DEFAULTS.lowLight,
+    speechRate: DEFAULTS.speechRate,
   });
 
   const refreshPredictOpts = useCallback(() => {
     void loadAppPreferences().then((p) => {
-      predictOptsRef.current = {
+      livePrefsRef.current = {
         hfovDeg: p.cameraHfovDeg,
         depthScale: p.depthScale,
         useGemini: p.internetGemini,
+        dangerThresholdM: p.dangerThresholdM,
+        aiFrameMs: p.aiFrameMs,
+        vibrationDanger: p.vibrationDanger,
+        lowLight: p.lowLight,
+        speechRate: p.speechRate,
       };
+      setYoloIntervalMs(p.aiFrameMs);
       setVolumeHardwareAction(p.volumeHardwareAction);
       setHandsFreeDescribe(p.handsFreeDescribe);
     });
+  }, []);
+
+  /** TTS options using saved speech rate + current alert volume. */
+  const voiceSpeakOpts = useCallback((volumeOverride) => {
+    const vol =
+      volumeOverride != null ? volumeOverride : alertVolumeRef.current;
+    const r = livePrefsRef.current.speechRate ?? DEFAULTS.speechRate;
+    return {
+      language: 'en-US',
+      rate: Math.min(1, Math.max(0.22, r)),
+      ...ttsVolumeOptions(vol),
+    };
   }, []);
 
   useEffect(() => {
@@ -245,29 +392,36 @@ export default function MainNavigationScreen({ navigation }) {
     aiTestRef.current = aiTestEnabled;
   }, [aiTestEnabled]);
 
+  /** Low-light: turn torch on when AI navigation starts on rear camera (user can toggle off). */
+  useEffect(() => {
+    if (!aiTestEnabled) return;
+    let cancelled = false;
+    loadAppPreferences().then((p) => {
+      if (cancelled || !aiTestRef.current) return;
+      if (p.lowLight && facing === CAMERA_TYPE.back) {
+        setTorch(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [aiTestEnabled, facing]);
+
   /** Voice command "activate navigation" → enable AI test (which now does navigation too). */
   const onActivateNavigation = useCallback(() => {
     if (aiTestRef.current) return;
     setAiTestEnabled(true);
     Speech.stop();
-    Speech.speak('Navigation activated.', {
-      language: 'en-US',
-      rate: 0.92,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
-  }, []);
+    Speech.speak('Navigation activated.', voiceSpeakOpts());
+  }, [voiceSpeakOpts]);
 
   /** Voice command "stop navigation" → disable AI test. */
   const onStopNavigation = useCallback(() => {
     if (!aiTestRef.current) return;
     setAiTestEnabled(false);
     Speech.stop();
-    Speech.speak('Navigation stopped.', {
-      language: 'en-US',
-      rate: 0.92,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
-  }, []);
+    Speech.speak('Navigation stopped.', voiceSpeakOpts());
+  }, [voiceSpeakOpts]);
 
   /** Sound / volume key / hotword → open Scene Query then call describe directly.
    *  Uses a module-level callback so it works whether the screen is new or already focused. */
@@ -305,13 +459,9 @@ export default function MainNavigationScreen({ navigation }) {
       handsFreeDescribe
         ? 'Hands-free phrase listening enabled.'
         : 'Hands-free phrase listening disabled.',
-      {
-        language: 'en-US',
-        rate: 0.92,
-        ...ttsVolumeOptions(alertVolumeRef.current),
-      }
+      voiceSpeakOpts()
     );
-  }, [handsFreeDescribe]);
+  }, [handsFreeDescribe, voiceSpeakOpts]);
 
   /** TTS: English obstacle line; prefers LLaVA guidance, then obstacle fallback. */
   const speakEnglishNav = useCallback((data, smoothedDets) => {
@@ -348,12 +498,10 @@ export default function MainNavigationScreen({ navigation }) {
     lastSpeakAtRef.current = now;
     Speech.stop();
     Speech.speak(msg, {
-      language: 'en-US',
-      rate: 0.9,
+      ...voiceSpeakOpts(),
       pitch: 1.0,
-      ...ttsVolumeOptions(alertVolumeRef.current),
     });
-  }, []);
+  }, [voiceSpeakOpts]);
 
   const onCameraTap = useCallback(() => {
     if (Platform.OS !== 'web') {
@@ -392,13 +540,11 @@ export default function MainNavigationScreen({ navigation }) {
     const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
     Speech.stop();
     Speech.speak(msg, {
-      language: 'en-US',
-      rate: 0.95,
+      ...voiceSpeakOpts(),
       pitch: 1.05,
-      ...ttsVolumeOptions(alertVolumeRef.current),
     });
     return true;
-  }, []);
+  }, [voiceSpeakOpts]);
 
   /** Fire Groq navigate call on its own timer, independent of YOLO loop. */
   const fireGroqNav = useCallback(async () => {
@@ -415,11 +561,11 @@ export default function MainNavigationScreen({ navigation }) {
         skipProcessing: true,
       });
       if (!aiTestRef.current) return;
-      const po = predictOptsRef.current;
+      const po = livePrefsRef.current;
       const data = await predictImage(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-        useGemini: false,
+        useGemini: po.useGemini,
         useGroq: true,
         groqMode: 'navigate',
       });
@@ -435,17 +581,13 @@ export default function MainNavigationScreen({ navigation }) {
       lastNavTextRef.current = guidance;
       lastNavSpokenAtRef.current = now;
       Speech.stop();
-      Speech.speak(guidance, {
-        language: 'en-US',
-        rate: 0.92,
-        ...ttsVolumeOptions(alertVolumeRef.current),
-      });
+      Speech.speak(guidance, voiceSpeakOpts());
     } catch {
       // ignore — nav is best-effort
     } finally {
       navInFlightRef.current = false;
     }
-  }, []);
+  }, [voiceSpeakOpts]);
 
   // --- AI Loop (non-overlapping frames + smoothed distances) ---
   const runFrame = useCallback(async () => {
@@ -463,11 +605,11 @@ export default function MainNavigationScreen({ navigation }) {
         quality: 0.22,
         skipProcessing: true,
       });
-      const po = predictOptsRef.current;
+      const po = livePrefsRef.current;
       const data = await predictImage(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-        useGemini: false,
+        useGemini: po.useGemini,
         useGroq: false,
       });
 
@@ -493,6 +635,37 @@ export default function MainNavigationScreen({ navigation }) {
       setInferenceError(null);
 
       speakEmergencyIfNeeded(primaryOnly);
+
+      const thr = livePrefsRef.current.dangerThresholdM;
+      const hysteresis = 0.28;
+      const distP = primary?.distance_m;
+      if (
+        primary &&
+        typeof distP === 'number' &&
+        distP <= thr &&
+        !manualSuppressRef.current
+      ) {
+        const disp = String(primary.name || 'obstacle').replace(/_/g, ' ');
+        const label = englishLabelForClass(primary.name);
+        const cap = label.charAt(0).toUpperCase() + label.slice(1);
+        const alertMsg = `Stop. ${cap} ${distP.toFixed(1)} meters ahead.`;
+        setDangerPayload({
+          displayLabel: disp,
+          distanceM: distP,
+          alertMessage: alertMsg,
+        });
+        if (
+          livePrefsRef.current.vibrationDanger &&
+          Platform.OS !== 'web' &&
+          Date.now() - lastDangerHapticAtRef.current > 2300
+        ) {
+          lastDangerHapticAtRef.current = Date.now();
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+        }
+      } else if (!primary || typeof distP !== 'number' || distP > thr + hysteresis) {
+        manualSuppressRef.current = false;
+        setDangerPayload(null);
+      }
     } catch (e) {
       if (aiTestRef.current) setInferenceError(e.message);
     } finally {
@@ -515,11 +688,13 @@ export default function MainNavigationScreen({ navigation }) {
       lastEmergencyAtRef.current = 0;
       // YOLO loop: fast, no Groq
       runFrame();
-      yoloInterval = setInterval(runFrame, FRAME_MS);
+      yoloInterval = setInterval(runFrame, yoloIntervalMs);
       // Groq nav loop: separate, slower timer
       setTimeout(() => { void fireGroqNav(); }, 1500); // first call after 1.5s
       groqInterval = setInterval(() => { void fireGroqNav(); }, NAV_GROQ_INTERVAL_MS);
     } else {
+      setDangerPayload(null);
+      manualSuppressRef.current = false;
       Speech.stop();
       lastTtsKeyRef.current = '';
       smoothStateRef.current = {};
@@ -532,7 +707,7 @@ export default function MainNavigationScreen({ navigation }) {
       if (yoloInterval) clearInterval(yoloInterval);
       if (groqInterval) clearInterval(groqInterval);
     };
-  }, [aiTestEnabled, runFrame, fireGroqNav]);
+  }, [aiTestEnabled, runFrame, fireGroqNav, yoloIntervalMs]);
 
   const onDangerBack = useCallback(() => {
     setDangerPayload(null);
@@ -550,7 +725,7 @@ export default function MainNavigationScreen({ navigation }) {
   if (!permission?.granted) {
       return (
         <View style={styles.placeholder}>
-            <MaterialCommunityIcons name="camera-off-outline" size={48} color={COLORS.grey} />
+            <MaterialCommunityIcons name="camera-off-outline" size={48} color={colors.grey} />
             <Text style={styles.placeholderTitle}>Camera access required</Text>
             <TouchableOpacity style={styles.allowBtn} onPress={requestPermission}>
                 <Text style={styles.allowBtnText}>Allow Camera</Text>
@@ -561,12 +736,12 @@ export default function MainNavigationScreen({ navigation }) {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
-      <StatusBar style="light" />
+      <StatusBar style={colors.statusBarStyle} />
 
       {/* TOP NAVIGATION BAR */}
       <View style={styles.topBar}>
         <Pressable onPress={handleGoBack} style={styles.topIcon}>
-          <MaterialCommunityIcons name="chevron-left" size={28} color={COLORS.teal} />
+          <MaterialCommunityIcons name="chevron-left" size={28} color={colors.teal} />
         </Pressable>
         <Text style={styles.time}>{clock}</Text>
         <View style={styles.topRight}>
@@ -587,11 +762,7 @@ export default function MainNavigationScreen({ navigation }) {
               const next = !aiTestEnabled;
               setAiTestEnabled(next);
               Speech.stop();
-              Speech.speak(next ? 'Navigation activated.' : 'Navigation stopped.', {
-                language: 'en-US',
-                rate: 0.92,
-                ...ttsVolumeOptions(alertVolumeRef.current),
-              });
+              Speech.speak(next ? 'Navigation activated.' : 'Navigation stopped.', voiceSpeakOpts());
             }}
             accessibilityRole="button"
             accessibilityState={{ selected: aiTestEnabled }}
@@ -606,7 +777,7 @@ export default function MainNavigationScreen({ navigation }) {
                 : 'Starts YOLO obstacle detection plus Groq detailed navigation instructions.'
             }
           >
-            <MaterialCommunityIcons name="brain" size={15} color={aiTestEnabled ? COLORS.btnText : COLORS.teal} />
+            <MaterialCommunityIcons name="brain" size={15} color={aiTestEnabled ? colors.btnText : colors.teal} />
             <Text style={[styles.aiPillText, aiTestEnabled && styles.aiPillTextOn]}>AI test</Text>
           </Pressable>
           <Pressable
@@ -622,7 +793,7 @@ export default function MainNavigationScreen({ navigation }) {
             accessibilityLabel="Describe environment scene summary"
             accessibilityHint="Opens Scene Query with a fresh scene description, same as the Sound tab."
           >
-            <MaterialCommunityIcons name="microphone-outline" size={15} color={COLORS.teal} />
+            <MaterialCommunityIcons name="microphone-outline" size={15} color={colors.teal} />
             <Text style={styles.aiPillText}>Describe</Text>
           </Pressable>
         </View>
@@ -652,7 +823,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityRole="button"
           accessibilityLabel="Switch front or back camera"
         >
-          <MaterialCommunityIcons name="camera-flip-outline" size={22} color={COLORS.white} />
+          <MaterialCommunityIcons name="camera-flip-outline" size={22} color={colors.overlayIcon} />
         </Pressable>
 
         <Pressable
@@ -672,7 +843,7 @@ export default function MainNavigationScreen({ navigation }) {
           <MaterialCommunityIcons
             name={torch ? 'flashlight' : 'flashlight-off'}
             size={24}
-            color={COLORS.white}
+            color={colors.overlayIcon}
           />
         </Pressable>
       </View>
@@ -684,7 +855,7 @@ export default function MainNavigationScreen({ navigation }) {
         <MaterialCommunityIcons
           name={aiTestEnabled ? 'brain' : 'alert-circle-outline'}
           size={22}
-          color={aiTestEnabled ? COLORS.teal : COLORS.grey}
+          color={aiTestEnabled ? colors.teal : colors.grey}
           style={styles.alertCardIcon}
         />
         <View style={styles.alertTextCol}>
@@ -755,7 +926,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityLabel="Scene description — opens Scene Query"
           accessibilityHint="Opens Scene Query and reads a scene description. Press and hold to open alert volume slider."
         >
-          <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
+          <MaterialCommunityIcons name="volume-high" size={26} color={colors.tealBright} />
           <Text style={styles.navLabel}>Sound</Text>
         </Pressable>
 
@@ -766,7 +937,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityLabel="Scene descriptions"
           accessibilityHint="Opens the scene description chat. Use Describe scene for a fresh summary."
         >
-          <MaterialCommunityIcons name="chart-box-outline" size={30} color={COLORS.btnText} />
+          <MaterialCommunityIcons name="chart-box-outline" size={30} color={colors.btnText} />
         </Pressable>
 
         <Pressable
@@ -776,7 +947,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityLabel="Settings"
           accessibilityHint="Shortcuts for volume keys describe and hands-free phrase"
         >
-          <MaterialCommunityIcons name="cog-outline" size={26} color={COLORS.tealBright} />
+          <MaterialCommunityIcons name="cog-outline" size={26} color={colors.tealBright} />
           <Text style={styles.navLabel}>Settings</Text>
         </Pressable>
       </View>
@@ -793,9 +964,9 @@ export default function MainNavigationScreen({ navigation }) {
                onSlidingComplete={onAlertVolumeSliderComplete}
                minimumValue={0}
                maximumValue={1}
-               minimumTrackTintColor={COLORS.teal}
-               maximumTrackTintColor={COLORS.borderMuted}
-               thumbTintColor={COLORS.teal}
+               minimumTrackTintColor={colors.teal}
+               maximumTrackTintColor={colors.borderMuted}
+               thumbTintColor={colors.teal}
             />
             <TouchableOpacity style={styles.modalDone} onPress={() => setVolumeOpen(false)}>
               <Text style={styles.modalDoneText}>DONE</Text>
@@ -804,122 +975,13 @@ export default function MainNavigationScreen({ navigation }) {
         </Pressable>
       </Modal>
 
-      <DangerAlertModal visible={!!dangerPayload} onBack={onDangerBack} />
+      <DangerAlertModal
+        visible={!!dangerPayload}
+        displayLabel={dangerPayload?.displayLabel}
+        distanceM={dangerPayload?.distanceM}
+        alertMessage={dangerPayload?.alertMessage ?? ''}
+        onBack={onDangerBack}
+      />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.bg },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, height: 60 },
-  time: { color: 'white', fontSize: 18, fontWeight: '700', letterSpacing: -0.5 },
-  topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  livePill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, gap: 6 },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444' },
-  liveText: { color: 'white', fontSize: 11, fontWeight: '800' },
-  aiPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 6, borderWidth: 1, borderColor: 'rgba(20,184,166,0.3)' },
-  aiPillOn: { backgroundColor: COLORS.teal, borderColor: COLORS.teal },
-  aiPillText: { color: COLORS.teal, fontSize: 12, fontWeight: '700' },
-  aiPillTextOn: { color: COLORS.btnText },
-  aiPillPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
-  visionArea: { flex: 1, marginHorizontal: 15, marginVertical: 10, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111' },
-  cameraTouchable: { flex: 1 },
-  tapFlash: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-  },
-  flipBtn: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 20,
-  },
-  torchBtn: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 20,
-  },
-  riskStrip: { height: 4, marginHorizontal: 25, borderRadius: 2 },
-  alertCard: {
-    flexDirection: 'row',
-    margin: 20,
-    padding: 20,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 24,
-    alignItems: 'flex-start',
-    gap: 15,
-  },
-  alertCardIcon: { marginTop: 2 },
-  cardSectionLabel: {
-    color: COLORS.grey,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-    marginTop: 10,
-    marginBottom: 2,
-    fontFamily: FONTS.en.semibold,
-  },
-  cardSectionLabelFirst: { marginTop: 0 },
-  alertTitle: { color: 'white', fontSize: 17, fontWeight: '700' },
-  alertSub: { color: COLORS.grey, fontSize: 13 },
-  voiceHint: { color: COLORS.tealBright, fontSize: 12, marginTop: 10, lineHeight: 18 },
-  voiceContextHint: {
-    color: COLORS.tealBright,
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 2,
-    lineHeight: 20,
-    fontFamily: FONTS.en.regular,
-  },
-  sceneDistanceLine: {
-    color: COLORS.white,
-    fontSize: 13,
-    marginTop: 8,
-    fontFamily: FONTS.en.medium,
-  },
-  sceneDistanceEm: {
-    color: COLORS.tealBright,
-    fontWeight: '800',
-    fontFamily: FONTS.en.extrabold,
-  },
-  inferenceMeta: { color: COLORS.grey, fontSize: 11, marginTop: 2, lineHeight: 16 },
-  inferenceErr: { color: COLORS.danger, fontSize: 12 },
-  bottomNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15,23,42,0.95)',
-    paddingVertical: 10,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    zIndex: 100,
-    elevation: 24,
-  },
-  navItem: { alignItems: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 12 },
-  navPressed: { opacity: 0.72 },
-  navLabel: { color: COLORS.grey, fontSize: 10, fontWeight: '600' },
-  centerFab: { width: 64, height: 64, borderRadius: 32, backgroundColor: COLORS.teal, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: COLORS.teal, shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
-  modalCard: { width: '80%', backgroundColor: '#1E293B', padding: 25, borderRadius: 30, alignItems: 'center' },
-  modalTitle: { color: 'white', fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
-  modalDone: { marginTop: 20, backgroundColor: COLORS.teal, paddingHorizontal: 30, paddingVertical: 12, borderRadius: 15 },
-  modalDoneText: { color: COLORS.btnText, fontWeight: 'bold' },
-  placeholder: { flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center', padding: 40 },
-  placeholderTitle: { color: 'white', fontSize: 18, marginVertical: 20, textAlign: 'center' },
-  allowBtn: { backgroundColor: COLORS.teal, paddingHorizontal: 25, paddingVertical: 15, borderRadius: 15 },
-  allowBtnText: { color: 'white', fontWeight: 'bold' }
-});
