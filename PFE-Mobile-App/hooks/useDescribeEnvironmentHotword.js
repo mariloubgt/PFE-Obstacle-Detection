@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import * as Speech from 'expo-speech';
 import { useIsFocused } from '@react-navigation/native';
 
-import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
+import { buildTtsOptions } from '../utils/buildTtsOptions';
 
 const PHRASE_COOLDOWN_MS = 4500;
 const RESTART_AFTER_DESCRIBE_MS = 5200;
@@ -53,6 +53,7 @@ export function useDescribeEnvironmentHotword({
   enabled,
   cameraRef,
   alertVolumeRef,
+  getTtsOpts,
   onPhraseMatched,
   onActivateNavigation,
   onStopNavigation,
@@ -61,6 +62,10 @@ export function useDescribeEnvironmentHotword({
   const onMatchedRef = useRef(onPhraseMatched);
   const onActivateNavRef = useRef(onActivateNavigation);
   const onStopNavRef = useRef(onStopNavigation);
+  const getTtsOptsRef = useRef(getTtsOpts);
+  useEffect(() => {
+    getTtsOptsRef.current = getTtsOpts;
+  }, [getTtsOpts]);
   useEffect(() => {
     onMatchedRef.current = onPhraseMatched;
   }, [onPhraseMatched]);
@@ -100,7 +105,10 @@ export function useDescribeEnvironmentHotword({
     /** listening session active (waiting for transcripts) */
     let sessionActive = false;
 
-    const volOpts = () => ttsVolumeOptions(alertVolumeRef?.current ?? 0.85);
+    const volOpts = () =>
+      typeof getTtsOptsRef.current === 'function'
+        ? getTtsOptsRef.current()
+        : buildTtsOptions(alertVolumeRef?.current ?? 0.85);
 
     const resumePreviewSafely = () => {
       try {
@@ -153,11 +161,7 @@ export function useDescribeEnvironmentHotword({
         pausePreviewSafely();
         Speech.speak(
           'Listening. Say describe environment, activate navigation, or stop navigation.',
-          {
-            language: 'en-US',
-            rate: 0.92,
-            ...volOpts(),
-          }
+          volOpts()
         );
 
         const delayMs = Platform.OS === 'ios' ? 1900 : 1100;
@@ -238,11 +242,7 @@ export function useDescribeEnvironmentHotword({
 
           if (e?.error !== 'no-speech' && e?.error !== 'speech-timeout') {
             Speech.stop();
-            Speech.speak('Speech recognition paused. Try again shortly.', {
-              language: 'en-US',
-              rate: 0.92,
-              ...volOpts(),
-            });
+            Speech.speak('Speech recognition paused. Try again shortly.', volOpts());
           }
 
           if (

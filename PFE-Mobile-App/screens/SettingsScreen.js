@@ -226,14 +226,12 @@ export default function SettingsScreen({ navigation }) {
     try {
       await saveInferenceApiUrl(apiUrl);
       const h = await fetchHealth(apiUrl.trim());
+      const groqReady = h.groq?.enabled && h.groq?.has_key;
+      const geminiReady = h.gemini?.enabled && h.gemini?.ok;
       setTestMsg(
         h.ok
-          ? `OK · model: ${h.model_path || 'loaded'}${
-              h.gemini_configured != null
-                ? h.gemini_configured
-                  ? ' · Gemini: on (server key)'
-                  : ' · Gemini: set GEMINI_API_KEY on PC for AI test'
-                : ''
+          ? `OK · YOLO loaded · Groq: ${groqReady ? 'ready' : 'set GROQ_API_KEY on PC'} · Gemini: ${
+              geminiReady ? 'ready' : 'off or set GEMINI_API_KEY'
             }`
           : 'Unexpected response'
       );
@@ -436,6 +434,15 @@ export default function SettingsScreen({ navigation }) {
         </View>
 
         <View style={styles.card}>
+          <Pressable
+            style={({ pressed }) => [styles.navRow, pressed && styles.pressed]}
+            onPress={() => navigation.navigate('AILab')}
+          >
+            <MaterialCommunityIcons name="flask-outline" size={22} color={COLORS.teal} />
+            <Text style={styles.navRowText}>AI Lab — test models & server URL</Text>
+            <MaterialCommunityIcons name="chevron-right" size={22} color={COLORS.grey} />
+          </Pressable>
+          <InsetDivider />
           <Pressable
             style={({ pressed }) => [styles.navRow, styles.navRowLast, pressed && styles.pressed]}
             onPress={() => navigation.navigate('Permissions')}

@@ -6,91 +6,16 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
-import { LAYOUT } from '../constants/theme';
+import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
-import { useThemeColors } from '../contexts/ThemeContext';
 import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
+import * as Speech from 'expo-speech';
 import { loadSpeechRate, saveSpeechRate } from '../utils/appSettings';
+import { buildTtsOptions } from '../utils/buildTtsOptions';
 
 export default function LanguageVoiceScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const colors = useThemeColors();
-  const styles = useMemo(
-    () =>
-      StyleSheet.create({
-        root: {
-          flex: 1,
-          backgroundColor: colors.bg,
-          paddingHorizontal: LAYOUT.screenPaddingH,
-          paddingTop: 8,
-        },
-        title: {
-          color: colors.text,
-          fontSize: 26,
-          fontFamily: FONTS.en.extrabold,
-          marginBottom: 8,
-        },
-        subtitle: {
-          color: colors.tealBright,
-          fontSize: 15,
-          lineHeight: 22,
-          marginBottom: 22,
-          fontFamily: FONTS.en.regular,
-        },
-        sliderBlock: {
-          marginBottom: 22,
-        },
-        sliderHeader: {
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 6,
-        },
-        sliderLabel: {
-          color: colors.text,
-          fontSize: 16,
-          fontFamily: FONTS.en.bold,
-        },
-        sliderHint: {
-          color: colors.tealBright,
-          fontSize: 14,
-          fontFamily: FONTS.en.semibold,
-        },
-        slider: {
-          width: '100%',
-          height: 40,
-        },
-        sliderEnds: {
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          marginTop: -4,
-        },
-        endLabel: {
-          color: colors.grey,
-          fontSize: 12,
-          fontFamily: FONTS.en.regular,
-        },
-        primaryBtn: {
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 8,
-          backgroundColor: colors.teal,
-          borderRadius: LAYOUT.buttonRadius,
-          paddingVertical: 16,
-          minHeight: 56,
-        },
-        pressed: { opacity: 0.92 },
-        primaryBtnText: {
-          color: colors.btnText,
-          fontSize: 17,
-          fontFamily: FONTS.en.extrabold,
-        },
-      }),
-    [colors]
-  );
-
   const [speechRate, setSpeechRate] = useState(0.45);
   const [volume, setVolume] = useState(0.66);
 
@@ -133,7 +58,7 @@ export default function LanguageVoiceScreen({ navigation }) {
         },
       ]}
     >
-      <StatusBar style={colors.statusBarStyle} />
+      <StatusBar style="light" />
       <ScreenHeader onBack={() => navigation.goBack()} />
 
       <Text style={styles.title}>Voice Settings</Text>
@@ -153,9 +78,9 @@ export default function LanguageVoiceScreen({ navigation }) {
           onSlidingComplete={async (v) => {
             setSpeechRate(await saveSpeechRate(v));
           }}
-          minimumTrackTintColor={colors.teal}
-          maximumTrackTintColor={colors.borderMuted}
-          thumbTintColor={colors.teal}
+          minimumTrackTintColor={COLORS.teal}
+          maximumTrackTintColor={COLORS.borderMuted}
+          thumbTintColor={COLORS.teal}
         />
         <View style={styles.sliderEnds}>
           <Text style={styles.endLabel}>Slow</Text>
@@ -178,15 +103,31 @@ export default function LanguageVoiceScreen({ navigation }) {
             void applyAlertVolumeToSystemOutput(v);
           }}
           onSlidingComplete={onAlertVolumeComplete}
-          minimumTrackTintColor={colors.teal}
-          maximumTrackTintColor={colors.borderMuted}
-          thumbTintColor={colors.teal}
+          minimumTrackTintColor={COLORS.teal}
+          maximumTrackTintColor={COLORS.borderMuted}
+          thumbTintColor={COLORS.teal}
         />
         <View style={styles.sliderEnds}>
           <Text style={styles.endLabel}>Low</Text>
           <Text style={styles.endLabel}>High</Text>
         </View>
       </View>
+
+      <Pressable
+        style={({ pressed }) => [styles.testVoiceBtn, pressed && styles.pressed]}
+        onPress={() => {
+          Speech.stop();
+          Speech.speak(
+            'This is how navigation alerts will sound at your current settings.',
+            buildTtsOptions(volume, speechRate)
+          );
+        }}
+        accessibilityRole="button"
+        accessibilityLabel="Test voice settings"
+      >
+        <MaterialCommunityIcons name="volume-high" size={20} color={COLORS.teal} />
+        <Text style={styles.testVoiceText}>Test voice</Text>
+      </Pressable>
 
       <View style={{ flex: 1 }} />
 
@@ -197,8 +138,95 @@ export default function LanguageVoiceScreen({ navigation }) {
         accessibilityLabel="Start navigation"
       >
         <Text style={styles.primaryBtnText}>Start</Text>
-        <MaterialCommunityIcons name="arrow-right" size={22} color={colors.btnText} />
+        <MaterialCommunityIcons name="arrow-right" size={22} color={COLORS.btnText} />
       </Pressable>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+    paddingHorizontal: LAYOUT.screenPaddingH,
+    paddingTop: 8,
+  },
+  title: {
+    color: COLORS.white,
+    fontSize: 26,
+    fontFamily: FONTS.en.extrabold,
+    marginBottom: 8,
+  },
+  subtitle: {
+    color: COLORS.tealBright,
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 22,
+    fontFamily: FONTS.en.regular,
+  },
+  sliderBlock: {
+    marginBottom: 22,
+  },
+  sliderHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  sliderLabel: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontFamily: FONTS.en.bold,
+  },
+  sliderHint: {
+    color: COLORS.tealBright,
+    fontSize: 14,
+    fontFamily: FONTS.en.semibold,
+  },
+  slider: {
+    width: '100%',
+    height: 40,
+  },
+  sliderEnds: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: -4,
+  },
+  endLabel: {
+    color: COLORS.grey,
+    fontSize: 12,
+    fontFamily: FONTS.en.regular,
+  },
+  testVoiceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: LAYOUT.buttonRadius,
+    borderWidth: 1,
+    borderColor: COLORS.teal,
+    marginBottom: 16,
+  },
+  testVoiceText: {
+    color: COLORS.teal,
+    fontSize: 15,
+    fontFamily: FONTS.en.semibold,
+  },
+  primaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: COLORS.teal,
+    borderRadius: LAYOUT.buttonRadius,
+    paddingVertical: 16,
+    minHeight: 56,
+  },
+  pressed: { opacity: 0.92 },
+  primaryBtnText: {
+    color: COLORS.btnText,
+    fontSize: 17,
+    fontFamily: FONTS.en.extrabold,
+  },
+});

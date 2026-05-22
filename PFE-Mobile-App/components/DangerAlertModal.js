@@ -9,7 +9,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
-import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
+import { buildTtsOptions } from '../utils/buildTtsOptions';
+import { loadSpeechRate } from '../utils/appSettings';
 
 const DANGER = {
   bg: '#1a0a0a',
@@ -29,6 +30,13 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
   const insets = useSafeAreaInsets();
   const lastShakeAt = useRef(0);
   const lastMagnitude = useRef(0);
+  const speechRateRef = useRef(0.6);
+
+  useEffect(() => {
+    void loadSpeechRate().then((r) => {
+      speechRateRef.current = r;
+    });
+  }, []);
 
   useEffect(() => {
     void syncStoredAlertVolumeToSystem();
@@ -47,10 +55,8 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
     Speech.stop();
-    Speech.speak(alertMessage, {
-      language: 'en-US',
-      rate: 0.95,
-      ...ttsVolumeOptions(),
+    void syncStoredAlertVolumeToSystem().then((vol) => {
+      Speech.speak(alertMessage, buildTtsOptions(vol, speechRateRef.current));
     });
   }, [alertMessage]);
 

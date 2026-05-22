@@ -81,7 +81,7 @@ export const LAYOUT = {
   screenPaddingH: 24,
   cardRadius: 16,
   buttonRadius: 16,
-  logoBoxHeight: 128,
-  logoBoxMaxWidth: 240,
+  logoBoxHeight: 112,
+  logoBoxMaxWidth: 112,
   appNameBlockMinHeight: 48,
 };

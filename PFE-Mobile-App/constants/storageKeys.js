@@ -11,5 +11,8 @@ export const CAMERA_HFOV_DEG_KEY = '@visionaid_camera_hfov_deg';
 export const DEPTH_SCALE_KEY = '@visionaid_depth_scale';
 export const VOLUME_HARDWARE_ACTION_KEY = '@visionaid_volume_hardware_action';
 export const HANDS_FREE_DESCRIBE_KEY = '@visionaid_hands_free_describe';
-/** 'night_shift' | 'white_shift' */
-export const APPEARANCE_MODE_KEY = '@visionaid_appearance_mode';
+
+/** AI Lab: saved server URL presets [{ id, label, url }] */
+export const AI_LAB_URL_PRESETS_KEY = '@visionaid_ai_lab_url_presets';
+/** AI Lab: per-request model flags for testing */
+export const AI_LAB_PREDICT_OPTS_KEY = '@visionaid_ai_lab_predict_opts';

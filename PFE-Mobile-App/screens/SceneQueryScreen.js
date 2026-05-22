@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
@@ -7,15 +7,17 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ExpoCamera from 'expo-camera';
-import { LAYOUT } from '../constants/theme';
+import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
-import { useThemeColors } from '../contexts/ThemeContext';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { predictImage } from '../services/predict';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
+import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
 import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
-import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
+import { buildTtsOptions } from '../utils/buildTtsOptions';
+import { describeFromDetections } from '../utils/describeFromDetections';
+import { isSimulatorDevice } from '../utils/isSimulator';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back' };
@@ -38,189 +40,8 @@ function formatTime(d = new Date()) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function createSceneStyles(colors) {
-  return StyleSheet.create({
-    root: {
-      flex: 1,
-      backgroundColor: colors.bg,
-      paddingHorizontal: LAYOUT.screenPaddingH,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 8,
-      gap: 8,
-    },
-    backBtn: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      backgroundColor: colors.bgElevated,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    headerTitle: {
-      flex: 1,
-      color: colors.text,
-      fontSize: 20,
-      fontFamily: FONTS.en.bold,
-    },
-    headerSoundBtn: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      backgroundColor: colors.bgElevated,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    describeSceneBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      backgroundColor: colors.teal,
-      paddingVertical: 12,
-      paddingHorizontal: 16,
-      borderRadius: LAYOUT.buttonRadius,
-      marginBottom: 10,
-      minHeight: 48,
-    },
-    describeSceneBtnDisabled: { opacity: 0.55 },
-    describeSceneBtnText: {
-      color: colors.btnText,
-      fontSize: 15,
-      fontFamily: FONTS.en.bold,
-    },
-    scroll: { flex: 1 },
-    scrollContent: { paddingBottom: 16 },
-    msgRow: { marginBottom: 12, width: '100%' },
-    msgRowUser: { alignItems: 'flex-end' },
-    msgRowBot: { alignItems: 'flex-start' },
-    bubble: {
-      maxWidth: '88%',
-      paddingVertical: 12,
-      paddingHorizontal: 14,
-      borderRadius: 16,
-    },
-    bubbleUser: {
-      backgroundColor: colors.teal,
-      borderBottomRightRadius: 4,
-    },
-    bubbleBot: {
-      backgroundColor: colors.messageBubbleAssistant,
-      borderBottomLeftRadius: 4,
-    },
-    bubbleText: {
-      color: colors.text,
-      fontSize: 15,
-      lineHeight: 22,
-    },
-    bubbleTextUser: {
-      color: colors.btnText,
-    },
-    timeText: {
-      color: colors.grey,
-      fontSize: 11,
-      marginTop: 8,
-      fontFamily: FONTS.en.regular,
-    },
-    timeTextUser: {
-      color: 'rgba(11, 18, 32, 0.55)',
-    },
-    typingRow: { alignItems: 'flex-start', marginBottom: 8 },
-    typingBubble: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      backgroundColor: colors.messageBubbleAssistant,
-      paddingVertical: 12,
-      paddingHorizontal: 16,
-      borderRadius: 16,
-    },
-    typingDot: {
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-      backgroundColor: colors.grey,
-    },
-    footerRow: {
-      flexDirection: 'row',
-      gap: 12,
-      marginTop: 4,
-    },
-    endBtn: {
-      flex: 1,
-      paddingVertical: 16,
-      borderRadius: LAYOUT.buttonRadius,
-      backgroundColor: 'rgba(127, 29, 29, 0.35)',
-      borderWidth: 1,
-      borderColor: 'rgba(239, 68, 68, 0.5)',
-      alignItems: 'center',
-      minHeight: 56,
-      justifyContent: 'center',
-    },
-    endBtnText: {
-      color: '#FCA5A5',
-      fontSize: 16,
-      fontFamily: FONTS.en.semibold,
-    },
-    backNavBtn: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      paddingVertical: 16,
-      borderRadius: LAYOUT.buttonRadius,
-      backgroundColor: 'rgba(102, 210, 177, 0.1)',
-      borderWidth: 1,
-      borderColor: colors.teal,
-      minHeight: 56,
-    },
-    backNavText: {
-      color: colors.teal,
-      fontSize: 16,
-      fontFamily: FONTS.en.semibold,
-    },
-    pressed: { opacity: 0.9 },
-    cameraContainer: {
-      height: 120,
-      width: '100%',
-      borderRadius: 16,
-      overflow: 'hidden',
-      marginBottom: 10,
-      backgroundColor: '#000',
-    },
-    cameraPreview: {
-      flex: 1,
-    },
-    camOverlay: {
-      ...StyleSheet.absoluteFillObject,
-      backgroundColor: colors.overlayScrim,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      padding: 16,
-    },
-    camOverlayTitle: {
-      color: colors.text,
-      fontSize: 16,
-      fontFamily: FONTS.en.bold,
-      marginTop: 4,
-    },
-    camOverlaySub: {
-      color: colors.grey,
-      fontSize: 12,
-      fontFamily: FONTS.en.regular,
-      textAlign: 'center',
-    },
-  });
-}
-
 export default function SceneQueryScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const colors = useThemeColors();
-  const styles = useMemo(() => createSceneStyles(colors), [colors]);
   const scrollRef = useRef(null);
   const cameraRef = useRef(null);
   /** Latest describe request wins; older runs exit before speaking / appending. */
@@ -230,15 +51,17 @@ export default function SceneQueryScreen({ navigation }) {
     { id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() },
   ]);
   const [isTyping, setIsTyping] = useState(false);
+  const [camError, setCamError] = useState(null);
   const alertVolumeRef = useRef(0.8);
+  const isSimulator = isSimulatorDevice();
+  const prefsRef = useRef(DEFAULTS);
 
   const speakReply = useCallback((text) => {
     Speech.stop();
-    Speech.speak(text, {
-      language: 'en-US',
-      rate: 0.92,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
+    Speech.speak(
+      text,
+      buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate)
+    );
   }, []);
 
   useEffect(() => {
@@ -288,11 +111,10 @@ export default function SceneQueryScreen({ navigation }) {
 
     try {
       if (stale()) return;
-      Speech.speak('Describing.', {
-        language: 'en-US',
-        rate: 0.92,
-        ...ttsVolumeOptions(alertVolumeRef.current),
-      });
+      Speech.speak(
+        'Describing.',
+        buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate)
+      );
 
       let granted = camPermission?.granted === true;
       if (!granted) {
@@ -350,16 +172,11 @@ export default function SceneQueryScreen({ navigation }) {
 
       const prefs = await loadAppPreferences();
       if (stale()) return;
+      const predictOpts = await getPredictOptionsForRequest(prefs);
+      prefsRef.current = prefs;
       let data;
       try {
-        data = await predictImage(api, photo.uri, {
-          hfovDeg: prefs.cameraHfovDeg,
-          depthScale: prefs.depthScale,
-          useGemini: prefs.internetGemini,
-          useGroq: true,
-          groqMode: 'describe',
-          detailed: true,
-        });
+        data = await predictImage(api, photo.uri, predictOpts);
       } catch (netErr) {
         if (stale()) return;
         const msg =
@@ -382,11 +199,23 @@ export default function SceneQueryScreen({ navigation }) {
         typeof data?.scene?.top5?.[0]?.label === 'string'
           ? data.scene.top5[0].label.trim()
           : '';
+      const geminiLine =
+        typeof data?.gemini?.darija === 'string' && data.gemini.darija.trim()
+          ? data.gemini.darija.trim()
+          : typeof data?.gemini?.focus === 'string' && data.gemini.focus.trim()
+            ? data.gemini.focus.trim()
+            : '';
+      const detFallback = describeFromDetections(data?.detections);
       const groqCombined = [groqScene, groqGuidance].filter(Boolean).join(' ').trim();
       const toSpeak =
         groqCombined ||
+        geminiLine ||
         sceneFallback ||
-        (groqErr ? `Could not describe the scene. ${groqErr}` : 'No description available.');
+        (groqErr && String(groqErr).includes('GROQ_API_KEY')
+          ? `${detFallback} Set GROQ_API_KEY on your PC and restart the inference server.`
+          : groqErr
+            ? `Could not describe the scene. ${groqErr}`
+            : detFallback);
 
       appendMessage({ id: nextId(), role: 'assistant', text: toSpeak });
       speakReply(toSpeak);
@@ -426,6 +255,7 @@ export default function SceneQueryScreen({ navigation }) {
         alertVolumeRef.current = v;
       });
       void loadAppPreferences().then((p) => {
+        prefsRef.current = p;
         setVolumeHardwareAction(p.volumeHardwareAction);
       });
     }, [refreshCamPermission])
@@ -446,7 +276,7 @@ export default function SceneQueryScreen({ navigation }) {
         },
       ]}
     >
-      <StatusBar style={colors.statusBarStyle} />
+      <StatusBar style="light" />
 
       <View style={styles.header}>
         <Pressable
@@ -456,7 +286,7 @@ export default function SceneQueryScreen({ navigation }) {
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
-          <MaterialCommunityIcons name="chevron-left" size={28} color={colors.teal} />
+          <MaterialCommunityIcons name="chevron-left" size={28} color={COLORS.teal} />
         </Pressable>
         <Text style={styles.headerTitle}>Scene description</Text>
         <Pressable
@@ -472,17 +302,22 @@ export default function SceneQueryScreen({ navigation }) {
           accessibilityLabel="Sound"
           accessibilityHint="Same as Sound on main navigation: captures the scene and reads a new description."
         >
-          <MaterialCommunityIcons name="volume-high" size={26} color={colors.tealBright} />
+          <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
         </Pressable>
       </View>
 
       <View style={styles.cameraContainer}>
-        <CameraComponent
-          ref={cameraRef}
-          style={styles.cameraPreview}
-          type={CAMERA_TYPE.back}
-          mode="picture"
-        />
+        {camPermission?.granted ? (
+          <CameraComponent
+            ref={cameraRef}
+            style={styles.cameraPreview}
+            type={CAMERA_TYPE.back}
+            ratio="16:9"
+            onMountError={(e) => setCamError(e?.message || 'Camera failed to start')}
+          />
+        ) : (
+          <View style={styles.cameraPreview} />
+        )}
         {camPermission && !camPermission.granted ? (
           <Pressable
             style={styles.camOverlay}
@@ -490,10 +325,22 @@ export default function SceneQueryScreen({ navigation }) {
             accessibilityRole="button"
             accessibilityLabel="Allow camera for scene descriptions"
           >
-            <MaterialCommunityIcons name="camera-outline" size={28} color={colors.tealBright} />
+            <MaterialCommunityIcons name="camera-outline" size={28} color={COLORS.tealBright} />
             <Text style={styles.camOverlayTitle}>Allow camera</Text>
             <Text style={styles.camOverlaySub}>Needed to grab a photo for describing</Text>
           </Pressable>
+        ) : null}
+        {camPermission?.granted && isSimulator ? (
+          <View style={styles.simBanner} pointerEvents="none">
+            <Text style={styles.simBannerText}>
+              Simulator: menu bar → Features → Camera → choose a source (not None)
+            </Text>
+          </View>
+        ) : null}
+        {camError ? (
+          <View style={styles.simBanner}>
+            <Text style={styles.simBannerText}>{camError}</Text>
+          </View>
         ) : null}
       </View>
 
@@ -504,7 +351,7 @@ export default function SceneQueryScreen({ navigation }) {
         accessibilityLabel="Describe scene"
         accessibilityHint="Takes a photo and reads a summary. Same shortcut as Sound on navigation."
       >
-        <MaterialCommunityIcons name="image-text" size={20} color={colors.btnText} />
+        <MaterialCommunityIcons name="image-text" size={20} color={COLORS.btnText} />
         <Text style={styles.describeSceneBtnText}>Describe scene</Text>
       </Pressable>
 
@@ -577,10 +424,205 @@ export default function SceneQueryScreen({ navigation }) {
             navigation.goBack();
           }}
         >
-          <MaterialCommunityIcons name="arrow-left" size={20} color={colors.teal} />
+          <MaterialCommunityIcons name="arrow-left" size={20} color={COLORS.teal} />
           <Text style={styles.backNavText}>Back to Nav</Text>
         </Pressable>
       </View>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+    paddingHorizontal: LAYOUT.screenPaddingH,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.bgElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    flex: 1,
+    color: COLORS.white,
+    fontSize: 20,
+    fontFamily: FONTS.en.bold,
+  },
+  headerSoundBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.bgElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  describeSceneBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: COLORS.teal,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: LAYOUT.buttonRadius,
+    marginBottom: 10,
+    minHeight: 48,
+  },
+  describeSceneBtnDisabled: { opacity: 0.55 },
+  describeSceneBtnText: {
+    color: COLORS.btnText,
+    fontSize: 15,
+    fontFamily: FONTS.en.bold,
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 16 },
+  msgRow: { marginBottom: 12, width: '100%' },
+  msgRowUser: { alignItems: 'flex-end' },
+  msgRowBot: { alignItems: 'flex-start' },
+  bubble: {
+    maxWidth: '88%',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+  },
+  bubbleUser: {
+    backgroundColor: COLORS.teal,
+    borderBottomRightRadius: 4,
+  },
+  bubbleBot: {
+    backgroundColor: '#1E293B',
+    borderBottomLeftRadius: 4,
+  },
+  bubbleText: {
+    color: COLORS.white,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  bubbleTextUser: {
+    color: COLORS.btnText,
+  },
+  timeText: {
+    color: COLORS.grey,
+    fontSize: 11,
+    marginTop: 8,
+    fontFamily: FONTS.en.regular,
+  },
+  timeTextUser: {
+    color: 'rgba(11, 18, 32, 0.55)',
+  },
+  typingRow: { alignItems: 'flex-start', marginBottom: 8 },
+  typingBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#1E293B',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+  },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: COLORS.grey,
+  },
+  footerRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  endBtn: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: LAYOUT.buttonRadius,
+    backgroundColor: 'rgba(127, 29, 29, 0.35)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.5)',
+    alignItems: 'center',
+    minHeight: 56,
+    justifyContent: 'center',
+  },
+  endBtnText: {
+    color: '#FCA5A5',
+    fontSize: 16,
+    fontFamily: FONTS.en.semibold,
+  },
+  backNavBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 16,
+    borderRadius: LAYOUT.buttonRadius,
+    backgroundColor: 'rgba(102, 210, 177, 0.1)',
+    borderWidth: 1,
+    borderColor: COLORS.teal,
+    minHeight: 56,
+  },
+  backNavText: {
+    color: COLORS.teal,
+    fontSize: 16,
+    fontFamily: FONTS.en.semibold,
+  },
+  pressed: { opacity: 0.9 },
+  cameraContainer: {
+    height: 120,
+    width: '100%',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 10,
+    backgroundColor: '#000',
+  },
+  cameraPreview: {
+    flex: 1,
+  },
+  camOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: 16,
+  },
+  camOverlayTitle: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontFamily: FONTS.en.bold,
+    marginTop: 4,
+  },
+  camOverlaySub: {
+    color: COLORS.grey,
+    fontSize: 12,
+    fontFamily: FONTS.en.regular,
+    textAlign: 'center',
+  },
+  simBanner: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 8,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: COLORS.teal,
+  },
+  simBannerText: {
+    color: COLORS.tealBright,
+    fontSize: 11,
+    lineHeight: 15,
+    fontFamily: FONTS.en.regular,
+    textAlign: 'center',
+  },
+});
