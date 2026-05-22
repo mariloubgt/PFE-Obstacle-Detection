@@ -7,7 +7,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -17,7 +17,7 @@
 
       "supportsTablet": true,
       "deploymentTarget": "18.0",
-      "bundleIdentifier": "com.anonymous.pfemobileapp",
+      "bundleIdentifier": "com.maya.visionaid",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Microphone access lets the app detect the phrase describe environment.",
         "NSAppTransportSecurity": {

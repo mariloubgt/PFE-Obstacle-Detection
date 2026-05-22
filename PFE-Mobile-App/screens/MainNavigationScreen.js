@@ -162,6 +162,10 @@ export default function MainNavigationScreen({ navigation }) {
     DEFAULTS.volumeHardwareAction
   );
   const [handsFreeDescribe, setHandsFreeDescribe] = useState(DEFAULTS.handsFreeDescribe);
+  const [voiceListening, setVoiceListening] = useState(false);
+  /** off | paused | starting | unavailable | denied | ready | listening */
+  const [voiceStatus, setVoiceStatus] = useState('off');
+  const [voiceDetail, setVoiceDetail] = useState(null);
   const [camMountError, setCamMountError] = useState(null);
   const isSimulator = isSimulatorDevice();
 
@@ -230,6 +234,13 @@ export default function MainNavigationScreen({ navigation }) {
       void syncStoredAlertVolumeToSystem().then((v) => setAlertVolume(v));
     }, [refreshPredictOpts])
   );
+
+  useEffect(() => {
+    if (!handsFreeDescribe) {
+      setVoiceStatus('off');
+    }
+  }, [handsFreeDescribe]);
+
   useEffect(() => {
     const tick = () => setClock(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     tick();
@@ -286,7 +297,7 @@ export default function MainNavigationScreen({ navigation }) {
     onDescribeEnvironment: openSceneQueryWithDescribe,
   });
 
-  useDescribeEnvironmentHotword({
+  const { requestVoiceListen } = useDescribeEnvironmentHotword({
     enabled: handsFreeDescribe && !volumeOpen,
     cameraRef,
     alertVolumeRef,
@@ -294,7 +305,34 @@ export default function MainNavigationScreen({ navigation }) {
     onPhraseMatched: openSceneQueryWithDescribe,
     onActivateNavigation,
     onStopNavigation,
+    onListeningChange: setVoiceListening,
+    onVoiceStatusChange: setVoiceStatus,
+    onVoiceDetailChange: setVoiceDetail,
   });
+
+  const voiceBannerText = (() => {
+    if (!handsFreeDescribe) return null;
+    switch (voiceStatus) {
+      case 'listening':
+        return 'Listening — say: describe environment, activate navigation, or stop navigation';
+      case 'ready':
+        return 'Hands-free on — tap here, then say your command';
+      case 'starting':
+        return 'Hands-free on — tap here when ready to speak';
+      case 'denied':
+        return 'Voice blocked — Settings → VisionAid → Microphone + Speech Recognition';
+      case 'unavailable':
+        return voiceDetail || 'Voice unavailable — reinstall from Xcode (▶ Run on iPhone)';
+      case 'paused':
+        return 'Voice paused — return to this screen';
+      default:
+        return 'Hands-free on — tap the bar to speak a command';
+    }
+  })();
+
+  const voiceBannerTappable =
+    handsFreeDescribe &&
+    (voiceStatus === 'ready' || voiceStatus === 'starting');
 
   /** Spoken cue when toggling hands-free from Settings — avoid first mount */
   const announceHandsFreeInitialized = useRef(false);
@@ -306,8 +344,8 @@ export default function MainNavigationScreen({ navigation }) {
     Speech.stop();
     Speech.speak(
       handsFreeDescribe
-        ? 'Hands-free phrase listening enabled.'
-        : 'Hands-free phrase listening disabled.',
+        ? 'Hands-free commands enabled. Tap the voice bar, then say your command.'
+        : 'Hands-free commands disabled.',
       ttsOpts()
     );
   }, [handsFreeDescribe]);
@@ -657,6 +695,45 @@ export default function MainNavigationScreen({ navigation }) {
           ) : (
             <View style={[StyleSheet.absoluteFill, styles.cameraPaused]} />
           )}
+          {voiceBannerText ? (
+            <Pressable
+              style={[
+                styles.voiceListenBanner,
+                (voiceStatus === 'denied' || voiceStatus === 'unavailable') &&
+                  styles.voiceListenBannerWarn,
+                voiceStatus === 'listening' && styles.voiceListenBannerActive,
+              ]}
+              onPress={voiceBannerTappable ? () => requestVoiceListen() : undefined}
+              disabled={!voiceBannerTappable}
+              accessibilityRole="button"
+              accessibilityLabel={
+                voiceBannerTappable
+                  ? 'Start listening for voice command'
+                  : voiceBannerText
+              }
+            >
+              <MaterialCommunityIcons
+                name={
+                  voiceStatus === 'denied' || voiceStatus === 'unavailable'
+                    ? 'microphone-off'
+                    : voiceStatus === 'listening'
+                      ? 'microphone'
+                      : 'microphone-outline'
+                }
+                size={16}
+                color={voiceStatus === 'denied' || voiceStatus === 'unavailable' ? '#FCA5A5' : '#A7F3D0'}
+              />
+              <Text
+                style={[
+                  styles.voiceListenBannerText,
+                  (voiceStatus === 'denied' || voiceStatus === 'unavailable') &&
+                    styles.voiceListenBannerTextWarn,
+                ]}
+              >
+                {voiceBannerText}
+              </Text>
+            </Pressable>
+          ) : null}
           {isFocused && isSimulator ? (
             <View style={styles.simBanner} pointerEvents="none">
               <Text style={styles.simBannerText}>
@@ -864,6 +941,40 @@ const styles = StyleSheet.create({
   visionArea: { flex: 1, marginHorizontal: 15, marginVertical: 10, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111' },
   cameraTouchable: { flex: 1 },
   cameraPaused: { backgroundColor: '#111' },
+  voiceListenBanner: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    top: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(6,78,59,0.92)',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(45,212,191,0.55)',
+    zIndex: 26,
+  },
+  voiceListenBannerWarn: {
+    backgroundColor: 'rgba(127,29,29,0.92)',
+    borderColor: 'rgba(248,113,113,0.55)',
+  },
+  voiceListenBannerActive: {
+    backgroundColor: 'rgba(6,95,70,0.95)',
+    borderColor: 'rgba(52,211,153,0.75)',
+  },
+  voiceListenBannerText: {
+    flex: 1,
+    color: '#A7F3D0',
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: FONTS.en.semibold,
+  },
+  voiceListenBannerTextWarn: {
+    color: '#FECACA',
+  },
   simBanner: {
     position: 'absolute',
     left: 12,

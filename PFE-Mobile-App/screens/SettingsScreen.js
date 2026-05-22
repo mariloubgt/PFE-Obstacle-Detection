@@ -366,7 +366,7 @@ export default function SettingsScreen({ navigation }) {
             styles={styles}
             colors={colors}
             title="Hands-free phrase"
-            subtitle="Say describe environment — requires mic; may briefly pause preview"
+            subtitle="Tap the voice bar on Main, then say describe environment, activate navigation, or stop navigation"
             value={handsFreePhrase}
             onValueChange={async (b) => setHandsFreePhrase(await saveHandsFreeDescribe(b))}
             last

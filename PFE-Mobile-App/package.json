@@ -7,6 +7,8 @@
     "start:dev": "expo start --dev-client",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "ios:device": "expo run:ios --device",
+    "ios:pods": "cd ios && pod install",
     "web": "expo start --web",
     "sync-icons": "bash scripts/sync-native-icons.sh",
     "ai-lab": "bash ../scripts/ai-lab-start.sh"
@@ -27,7 +29,7 @@
     "expo-linear-gradient": "~12.3.0",
     "expo-sensors": "~12.3.0",
     "expo-speech": "~11.3.0",
-    "expo-speech-recognition": "^2.1.5",
+    "expo-speech-recognition": "0.2.25",
     "expo-splash-screen": "~0.20.5",
     "expo-status-bar": "~1.6.0",
     "react": "18.2.0",
