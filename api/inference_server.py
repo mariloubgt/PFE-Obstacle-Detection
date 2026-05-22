@@ -9,16 +9,23 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(_PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+
 # Load local PFE config
 from pfe.phase3 import config
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import Body, FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps
 from ultralytics import YOLO
@@ -27,6 +34,7 @@ import uvicorn
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
 from api.llava_navigation import run_llava_navigation_if_enabled
 from api.groq_navigation import run_groq_navigation, status as groq_status
+from api import runtime_lab
 
 _DEFAULT_COCO = "yolov8n.pt"
 # Chemin poids : config par défaut, ou YOLO_WEIGHTS=yolov8n.pt pour COCO 80 classes
@@ -47,7 +55,7 @@ HFOV_DEG = float(os.environ.get("CAMERA_HORIZONTAL_FOV_DEG", "56.0")) # iPhone 1
 DEPTH_SCALE_ENV = float(os.environ.get("DEPTH_SCALE", "1.0"))
 
 
-def _parse_opt_float(value: str | None, default: float, lo: float, hi: float) -> float:
+def _parse_opt_float(value: Optional[str], default: float, lo: float, hi: float) -> float:
     if value is None or str(value).strip() == "":
         x = default
     else:
@@ -101,19 +109,98 @@ def root() -> dict[str, Any]:
         "predict": "/predict",
     }
 
+def _detect_lan_ip() -> Optional[str]:
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
+    lan = _detect_lan_ip()
+    gst = groq_status()
+    snap = runtime_lab.get_snapshot(
+        model_path=MODEL_PATH,
+        default_conf=CONF,
+        default_imgsz=YOLO_IMGSZ,
+        default_groq_model=gst.get("model") or "meta-llama/llama-4-scout-17b-16e-instruct",
+        port=PORT,
+        lan_ip=lan,
+    )
     return {
         "ok": model is not None,
         "model_path": MODEL_PATH,
-        "yolo_conf": CONF,
-        "yolo_imgsz": YOLO_IMGSZ,
+        "yolo_conf": snap["effective"]["yolo_conf"],
+        "yolo_imgsz": snap["effective"]["yolo_imgsz"],
         "horizontal_fov_deg": HFOV_DEG,
         "depth_scale_default": DEPTH_SCALE_ENV,
         "engine": "PFE-Phase3-Hybrid",
         "gemini": _gemini_status,
-        "groq": groq_status(),
+        "groq": gst,
+        "lab": snap,
+        "urls": snap.get("urls"),
     }
+
+
+@app.get("/lab/config")
+def lab_config_get() -> dict[str, Any]:
+    lan = _detect_lan_ip()
+    gst = groq_status()
+    return runtime_lab.get_snapshot(
+        model_path=MODEL_PATH,
+        default_conf=CONF,
+        default_imgsz=YOLO_IMGSZ,
+        default_groq_model=gst.get("model") or "meta-llama/llama-4-scout-17b-16e-instruct",
+        port=PORT,
+        lan_ip=lan,
+    )
+
+
+@app.put("/lab/config")
+def lab_config_put(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    applied = runtime_lab.apply_patch(body if isinstance(body, dict) else {})
+    lan = _detect_lan_ip()
+    gst = groq_status()
+    snap = runtime_lab.get_snapshot(
+        model_path=MODEL_PATH,
+        default_conf=CONF,
+        default_imgsz=YOLO_IMGSZ,
+        default_groq_model=gst.get("model") or "meta-llama/llama-4-scout-17b-16e-instruct",
+        port=PORT,
+        lan_ip=lan,
+    )
+    return {"applied": applied, "lab": snap}
+
+
+@app.post("/lab/reset")
+def lab_config_reset() -> dict[str, Any]:
+    runtime_lab.reset()
+    return lab_config_get()
+
+
+@app.post("/lab/reload-yolo")
+def lab_reload_yolo(body: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Reload YOLO weights (optional path in JSON body). Requires a short inference pause."""
+    global model, MODEL_PATH
+    payload = body or {}
+    weights = (payload.get("yolo_weights") or MODEL_PATH or "").strip()
+    if weights:
+        p = Path(weights)
+        if not p.is_absolute():
+            p = _PROJECT_ROOT / p
+        MODEL_PATH = str(p)
+        runtime_lab.apply_patch({"yolo_weights": MODEL_PATH})
+    print(f"[lab] Reloading YOLO from {MODEL_PATH}...")
+    model = YOLO(MODEL_PATH)
+    return {"ok": True, "model_path": MODEL_PATH}
 
 @app.post("/predict")
 async def predict(
@@ -122,8 +209,8 @@ async def predict(
     use_groq: str = Form("true"),
     groq_mode: str = Form("describe"),
     detailed: str = Form("false"),
-    hfov_deg: str | None = Form(None),
-    depth_scale: str | None = Form(None),
+    hfov_deg: Optional[str] = Form(None),
+    depth_scale: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     content = await file.read()
@@ -136,11 +223,13 @@ async def predict(
     req_scale = _parse_opt_float(depth_scale, DEPTH_SCALE_ENV, 0.35, 2.5)
     is_detailed = str(detailed).strip().lower() in ("1", "true", "yes", "on")
 
+    yolo_conf = runtime_lab.get_yolo_conf(CONF)
+    yolo_imgsz = runtime_lab.get_yolo_imgsz(YOLO_IMGSZ)
     results = model.predict(
         img,
-        conf=CONF,
+        conf=yolo_conf,
         iou=YOLO_IOU,
-        imgsz=YOLO_IMGSZ,
+        imgsz=yolo_imgsz,
         max_det=YOLO_MAX_DET,
         verbose=False,
     )[0]
@@ -179,7 +268,9 @@ async def predict(
         })
 
     # Groq + Llama 4 Scout. mode=describe (pure description) or navigate (with YOLO data).
-    if str(use_groq).strip().lower() in ("1", "true", "yes", "on"):
+    groq_on = str(use_groq).strip().lower() in ("1", "true", "yes", "on")
+    groq_on = groq_on and runtime_lab.get_enable_groq(True)
+    if groq_on:
         groq_result = run_groq_navigation(img, detections, mode=groq_mode)
     else:
         groq_result = {
@@ -193,12 +284,27 @@ async def predict(
             "error": "Skipped (use_groq=false).",
         }
 
-    # Scene list — prefer Groq's caption, fallback to Gemini scene head if explicitly enabled.
+    # Scene list — prefer Groq's caption, fallback to Gemini scene head or YOLO labels.
     scene_list = None
     if groq_result.get("scene"):
         scene_list = [{"label": groq_result["scene"], "probability": 1.0}]
     elif os.environ.get("ENABLE_SCENE", "0").strip().lower() in ("1", "true", "yes", "on"):
         scene_list = scene_top5_cached(img)
+    elif groq_result.get("error") and detections:
+        parts = []
+        for d in detections[:6]:
+            name = str(d.get("name", "object")).replace("_", " ")
+            dist = d.get("distance_m")
+            if isinstance(dist, (int, float)):
+                parts.append(f"{name} at {dist} m")
+            else:
+                parts.append(name)
+        scene_list = [
+            {
+                "label": "Visible: " + ", ".join(parts) + ".",
+                "probability": 1.0,
+            }
+        ]
 
     # Gemini = optional secondary path. Off by default now (Groq is main).
     if str(use_gemini).strip().lower() not in ("1", "true", "yes", "on"):
@@ -209,7 +315,9 @@ async def predict(
             "focus": None,
             "error": "Skipped (client use_gemini=false).",
         }
-    elif os.environ.get("ENABLE_GEMINI", "0").strip().lower() not in ("1", "true", "yes", "on"):
+    elif not runtime_lab.get_enable_gemini(
+        os.environ.get("ENABLE_GEMINI", "0").strip().lower() in ("1", "true", "yes", "on")
+    ):
         gem = {
             "text": None,
             "darija": None,
@@ -247,7 +355,7 @@ async def predict(
 async def voice_query(
     image: UploadFile = File(...),
     audio: UploadFile = File(...),
-    hfov_deg: str | None = Form(None),
+    hfov_deg: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     """
     Multimodal endpoint: transcribes user audio with Groq Whisper,

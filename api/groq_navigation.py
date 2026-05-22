@@ -44,7 +44,27 @@ _last_result: dict[str, Any] | None = None
 
 
 def _enabled() -> bool:
-    return os.environ.get("ENABLE_GROQ", "1").strip().lower() in ("1", "true", "yes", "on")
+    env_on = os.environ.get("ENABLE_GROQ", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    try:
+        from api.runtime_lab import get_enable_groq
+
+        return get_enable_groq(env_on)
+    except ImportError:
+        return env_on
+
+
+def _active_groq_model() -> str:
+    try:
+        from api.runtime_lab import get_groq_model
+
+        return get_groq_model(DEFAULT_MODEL)
+    except ImportError:
+        return DEFAULT_MODEL
 
 
 def _api_key() -> str | None:
@@ -303,7 +323,7 @@ def run_groq_navigation(
         prompt = _build_navigation_prompt(detections) if is_nav else _build_prompt(detections)
         system_msg = _NAVIGATE_SYSTEM if is_nav else _DESCRIBE_SYSTEM
         payload = {
-            "model": DEFAULT_MODEL,
+            "model": _active_groq_model(),
             "messages": [
                 {"role": "system", "content": system_msg},
                 {
@@ -337,7 +357,7 @@ def run_groq_navigation(
             "risk": _normalize_risk(parsed.get("risk")),
             "focus": (parsed.get("focus") or "").strip() or None,
             "ms": round((time.perf_counter() - t0) * 1000.0, 2),
-            "model": DEFAULT_MODEL,
+            "model": _active_groq_model(),
             "mode": "navigate" if is_nav else "describe",
             "error": None,
         }
