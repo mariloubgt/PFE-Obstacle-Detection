@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import * as Haptics from 'expo-haptics';
 import { Accelerometer } from 'expo-sensors';
-import * as Speech from 'expo-speech';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -10,7 +9,9 @@ import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { buildTtsOptions } from '../utils/buildTtsOptions';
+import { speakAlert } from '../utils/speakAlert';
 import { loadSpeechRate } from '../utils/appSettings';
+import { alertOutputState } from '../utils/systemOutputVolume';
 
 const DANGER = {
   bg: '#1a0a0a',
@@ -54,9 +55,9 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
     if (Platform.OS !== 'web') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
-    Speech.stop();
-    void syncStoredAlertVolumeToSystem().then((vol) => {
-      Speech.speak(alertMessage, buildTtsOptions(vol, speechRateRef.current));
+    speakAlert(alertMessage, {
+      ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current),
+      interrupt: true,
     });
   }, [alertMessage]);
 

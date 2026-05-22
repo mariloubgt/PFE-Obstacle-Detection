@@ -40,6 +40,7 @@ export function useVolumeHardwareShortcut(navigation, options = {}) {
   const nativeModRef = useRef(null);
 
   const restoreBaselineVolume = useCallback(() => {
+    if (Platform.OS === 'ios') return;
     const mod = nativeModRef.current;
     if (!mod || typeof mod.setVolume !== 'function') return;
     const v = alertOutputState.baseline01;
@@ -93,9 +94,6 @@ export function useVolumeHardwareShortcut(navigation, options = {}) {
 
     const run = async () => {
       await mod.showNativeVolumeUI?.({ enabled: false });
-      if (Platform.OS === 'ios' && typeof mod.enable === 'function') {
-        await Promise.resolve(mod.enable(true, true)).catch(() => {});
-      }
       await refreshFromStorage();
       if (cancelled) return;
 

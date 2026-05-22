@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -15,8 +15,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
-import { COLORS, LAYOUT } from '../constants/theme';
+import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { probeServer, updateLabConfig, resetLabConfig } from '../services/labApi';
 import { loadInferenceApiUrl, saveInferenceApiUrl } from '../utils/inferenceApiUrl';
 import {
@@ -29,7 +30,7 @@ import {
 } from '../utils/aiLabSettings';
 import { isSimulatorDevice } from '../utils/isSimulator';
 
-function Row({ title, subtitle, children, last }) {
+function Row({ styles, title, subtitle, children, last }) {
   return (
     <View style={[styles.row, last && styles.rowLast]}>
       <View style={styles.rowText}>
@@ -43,6 +44,8 @@ function Row({ title, subtitle, children, last }) {
 
 export default function AILabScreen({ navigation }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => createAILabStyles(colors), [colors]);
   const [apiUrl, setApiUrl] = useState('');
   const [presets, setPresets] = useState([]);
   const [labOpts, setLabOpts] = useState({
@@ -143,7 +146,7 @@ export default function AILabScreen({ navigation }) {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <StatusBar style="light" />
+      <StatusBar style={colors.statusBarStyle} />
       <ScreenHeader
         title="AI Lab"
         subtitle="Test models & server URL anytime"
@@ -163,7 +166,7 @@ export default function AILabScreen({ navigation }) {
           value={apiUrl}
           onChangeText={setApiUrl}
           placeholder="http://127.0.0.1:8787"
-          placeholderTextColor={COLORS.greyDark}
+          placeholderTextColor={colors.greyDark}
           autoCapitalize="none"
           autoCorrect={false}
         />
@@ -172,7 +175,7 @@ export default function AILabScreen({ navigation }) {
             <Text style={styles.btnText}>Save</Text>
           </Pressable>
           <Pressable style={[styles.btn, styles.btnPrimary]} onPress={() => void onProbe()} disabled={busy}>
-            {busy ? <ActivityIndicator color={COLORS.btnText} size="small" /> : (
+            {busy ? <ActivityIndicator color={colors.btnText} size="small" /> : (
               <Text style={styles.btnTextDark}>Test & load config</Text>
             )}
           </Pressable>
@@ -217,7 +220,7 @@ export default function AILabScreen({ navigation }) {
           <TextInput
             style={[styles.input, { flex: 1, marginBottom: 0 }]}
             placeholder="Preset name (optional)"
-            placeholderTextColor={COLORS.greyDark}
+            placeholderTextColor={colors.greyDark}
             value={presetLabel}
             onChangeText={setPresetLabel}
           />
@@ -237,23 +240,23 @@ export default function AILabScreen({ navigation }) {
 
         <Text style={styles.section}>App → server (each /predict)</Text>
         <View style={styles.card}>
-          <Row title="Use Groq (Llama)" subtitle="Scene + navigation AI">
+          <Row styles={styles} title="Use Groq (Llama)" subtitle="Scene + navigation AI">
             <Switch
               value={labOpts.useGroq}
               onValueChange={(v) => void setOpt({ useGroq: v })}
-              trackColor={{ false: COLORS.borderMuted, true: COLORS.teal }}
-              thumbColor={COLORS.white}
+              trackColor={{ false: colors.borderMuted, true: colors.teal }}
+              thumbColor={colors.white}
             />
           </Row>
-          <Row title="Use Gemini" subtitle="Needs GEMINI_API_KEY on PC">
+          <Row styles={styles} title="Use Gemini" subtitle="Needs GEMINI_API_KEY on PC">
             <Switch
               value={labOpts.useGemini}
               onValueChange={(v) => void setOpt({ useGemini: v })}
-              trackColor={{ false: COLORS.borderMuted, true: COLORS.teal }}
-              thumbColor={COLORS.white}
+              trackColor={{ false: colors.borderMuted, true: colors.teal }}
+              thumbColor={colors.white}
             />
           </Row>
-          <Row title="Groq mode" subtitle={labOpts.groqMode === 'navigate' ? 'Navigation' : 'Describe'}>
+          <Row styles={styles} title="Groq mode" subtitle={labOpts.groqMode === 'navigate' ? 'Navigation' : 'Describe'}>
             <Pressable
               onPress={() =>
                 void setOpt({
@@ -264,12 +267,12 @@ export default function AILabScreen({ navigation }) {
               <Text style={styles.chip}>{labOpts.groqMode}</Text>
             </Pressable>
           </Row>
-          <Row title="Detailed describe" subtitle="Longer scene text" last>
+          <Row styles={styles} title="Detailed describe" subtitle="Longer scene text" last>
             <Switch
               value={labOpts.detailed}
               onValueChange={(v) => void setOpt({ detailed: v })}
-              trackColor={{ false: COLORS.borderMuted, true: COLORS.teal }}
-              thumbColor={COLORS.white}
+              trackColor={{ false: colors.borderMuted, true: colors.teal }}
+              thumbColor={colors.white}
             />
           </Row>
         </View>
@@ -280,7 +283,7 @@ export default function AILabScreen({ navigation }) {
           value={groqModel}
           onChangeText={setGroqModel}
           placeholder="Groq model id"
-          placeholderTextColor={COLORS.greyDark}
+          placeholderTextColor={colors.greyDark}
           autoCapitalize="none"
         />
         <View style={styles.btnRow}>
@@ -313,11 +316,11 @@ export default function AILabScreen({ navigation }) {
           style={styles.navBtn}
           onPress={() => navigation.navigate('SceneQuery')}
         >
-          <MaterialCommunityIcons name="image-text" size={22} color={COLORS.teal} />
+          <MaterialCommunityIcons name="image-text" size={22} color={colors.teal} />
           <Text style={styles.navBtnText}>Scene description</Text>
         </Pressable>
         <Pressable style={styles.navBtn} onPress={() => navigation.navigate('Main')}>
-          <MaterialCommunityIcons name="camera" size={22} color={COLORS.teal} />
+          <MaterialCommunityIcons name="camera" size={22} color={colors.teal} />
           <Text style={styles.navBtnText}>Live navigation + YOLO</Text>
         </Pressable>
 
@@ -333,12 +336,13 @@ export default function AILabScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.bg, paddingHorizontal: LAYOUT.screenPaddingH },
+function createAILabStyles(colors) {
+  return StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: LAYOUT.screenPaddingH },
   scroll: { paddingBottom: 32 },
-  lead: { color: COLORS.grey, fontSize: 14, lineHeight: 20, marginBottom: 16, fontFamily: FONTS.en.regular },
+  lead: { color: colors.grey, fontSize: 14, lineHeight: 20, marginBottom: 16, fontFamily: FONTS.en.regular },
   section: {
-    color: COLORS.teal,
+    color: colors.teal,
     fontSize: 12,
     fontFamily: FONTS.en.extrabold,
     letterSpacing: 1,
@@ -347,12 +351,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   input: {
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
     borderRadius: 12,
     padding: 12,
-    color: COLORS.white,
+    color: colors.white,
     fontSize: 15,
     marginBottom: 10,
     fontFamily: FONTS.en.regular,
@@ -363,30 +367,30 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: COLORS.teal,
+    borderColor: colors.teal,
     alignItems: 'center',
   },
-  btnPrimary: { backgroundColor: COLORS.teal, borderColor: COLORS.teal },
-  btnText: { color: COLORS.teal, fontFamily: FONTS.en.semibold },
-  btnTextDark: { color: COLORS.btnText, fontFamily: FONTS.en.extrabold },
+  btnPrimary: { backgroundColor: colors.teal, borderColor: colors.teal },
+  btnText: { color: colors.teal, fontFamily: FONTS.en.semibold },
+  btnTextDark: { color: colors.btnText, fontFamily: FONTS.en.extrabold },
   lanBtn: { marginBottom: 12, padding: 10, backgroundColor: 'rgba(102,210,177,0.12)', borderRadius: 10 },
-  lanBtnText: { color: COLORS.tealBright, fontSize: 13, fontFamily: FONTS.en.semibold },
+  lanBtnText: { color: colors.tealBright, fontSize: 13, fontFamily: FONTS.en.semibold },
   presetRow: {
     padding: 12,
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderRadius: 12,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
   },
-  presetLabel: { color: COLORS.white, fontFamily: FONTS.en.semibold, fontSize: 15 },
-  presetUrl: { color: COLORS.grey, fontSize: 12, marginTop: 4, fontFamily: FONTS.en.regular },
+  presetLabel: { color: colors.white, fontFamily: FONTS.en.semibold, fontSize: 15 },
+  presetUrl: { color: colors.grey, fontSize: 12, marginTop: 4, fontFamily: FONTS.en.regular },
   addPreset: { flexDirection: 'row', gap: 8, alignItems: 'center', marginBottom: 12 },
   card: {
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderRadius: LAYOUT.cardRadius,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
     marginBottom: 12,
   },
   row: {
@@ -398,10 +402,10 @@ const styles = StyleSheet.create({
   },
   rowLast: { paddingBottom: 16 },
   rowText: { flex: 1 },
-  rowTitle: { color: COLORS.white, fontSize: 15, fontFamily: FONTS.en.semibold },
-  rowSub: { color: COLORS.grey, fontSize: 12, marginTop: 2, fontFamily: FONTS.en.regular },
+  rowTitle: { color: colors.white, fontSize: 15, fontFamily: FONTS.en.semibold },
+  rowSub: { color: colors.grey, fontSize: 12, marginTop: 2, fontFamily: FONTS.en.regular },
   chip: {
-    color: COLORS.teal,
+    color: colors.teal,
     fontFamily: FONTS.en.bold,
     fontSize: 14,
     paddingHorizontal: 10,
@@ -410,27 +414,28 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   configBox: {
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     padding: 12,
     borderRadius: 12,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
   },
-  configLine: { color: COLORS.grey, fontSize: 12, fontFamily: FONTS.en.regular, marginBottom: 4 },
-  msg: { color: COLORS.tealBright, fontSize: 13, marginBottom: 12, fontFamily: FONTS.en.regular },
+  configLine: { color: colors.grey, fontSize: 12, fontFamily: FONTS.en.regular, marginBottom: 4 },
+  msg: { color: colors.tealBright, fontSize: 13, marginBottom: 12, fontFamily: FONTS.en.regular },
   navBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     padding: 14,
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     borderRadius: 12,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: COLORS.borderMuted,
+    borderColor: colors.borderMuted,
   },
-  navBtnText: { color: COLORS.white, fontSize: 16, fontFamily: FONTS.en.semibold },
-  hint: { color: COLORS.grey, fontSize: 12, lineHeight: 18, marginTop: 12, fontFamily: FONTS.en.regular },
-  mono: { fontFamily: 'Menlo', color: COLORS.tealBright },
+  navBtnText: { color: colors.white, fontSize: 16, fontFamily: FONTS.en.semibold },
+  hint: { color: colors.grey, fontSize: 12, lineHeight: 18, marginTop: 12, fontFamily: FONTS.en.regular },
+  mono: { fontFamily: 'Menlo', color: colors.tealBright },
 });
+}

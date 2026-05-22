@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ExpoCamera from 'expo-camera';
@@ -14,8 +14,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenHeader from '../components/ScreenHeader';
-import { COLORS, LAYOUT } from '../constants/theme';
+import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { loadInternetGemini, saveInternetGemini } from '../utils/appSettings';
 
 function tryLoadSpeechRecognition() {
@@ -26,25 +27,25 @@ function tryLoadSpeechRecognition() {
   }
 }
 
-function PermissionRow({ icon, title, description, value, onValueChange, busy }) {
+function PermissionRow({ styles, colors, icon, title, description, value, onValueChange, busy }) {
   return (
     <View style={styles.rowCard}>
       <View style={styles.iconWrap}>
-        <MaterialCommunityIcons name={icon} size={26} color={COLORS.tealBright} />
+        <MaterialCommunityIcons name={icon} size={26} color={colors.tealBright} />
       </View>
       <View style={styles.rowText}>
         <Text style={styles.rowTitle}>{title}</Text>
         <Text style={styles.rowDesc}>{description}</Text>
       </View>
       {busy ? (
-        <ActivityIndicator color={COLORS.teal} />
+        <ActivityIndicator color={colors.teal} />
       ) : (
         <Switch
           value={value}
           onValueChange={onValueChange}
-          trackColor={{ false: COLORS.borderMuted, true: '#134E4A' }}
-          thumbColor={value ? COLORS.teal : '#CBD5E1'}
-          ios_backgroundColor={COLORS.borderMuted}
+          trackColor={{ false: colors.borderMuted, true: colors.geminiSwitchTrackOn }}
+          thumbColor={value ? colors.teal : '#CBD5E1'}
+          ios_backgroundColor={colors.borderMuted}
         />
       )}
     </View>
@@ -53,6 +54,8 @@ function PermissionRow({ icon, title, description, value, onValueChange, busy })
 
 export default function PermissionsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => createPermissionsStyles(colors), [colors]);
   const [camera, setCamera] = useState(false);
   const [voiceCmd, setVoiceCmd] = useState(false);
   const [audioAlerts, setAudioAlerts] = useState(true);
@@ -154,7 +157,7 @@ export default function PermissionsScreen({ navigation }) {
         },
       ]}
     >
-      <StatusBar style="light" />
+      <StatusBar style={colors.statusBarStyle} />
       <ScreenHeader onBack={() => navigation.goBack()} />
       <ScrollView
         style={styles.scrollView}
@@ -168,6 +171,8 @@ export default function PermissionsScreen({ navigation }) {
 
         <View style={styles.list}>
           <PermissionRow
+            styles={styles}
+            colors={colors}
             icon="camera"
             title="Live Camera Feed"
             description="Detects obstacles and distances in real time."
@@ -176,6 +181,8 @@ export default function PermissionsScreen({ navigation }) {
             onValueChange={(v) => void requestCamera(v)}
           />
           <PermissionRow
+            styles={styles}
+            colors={colors}
             icon="microphone"
             title="Voice Commands in English"
             description="Hands-free phrase and speech recognition (dev build)."
@@ -184,6 +191,8 @@ export default function PermissionsScreen({ navigation }) {
             onValueChange={(v) => void requestVoice(v)}
           />
           <PermissionRow
+            styles={styles}
+            colors={colors}
             icon="surround-sound"
             title="Audio Alerts in English"
             description="Spoken warnings and alert volume — no extra permission."
@@ -191,6 +200,8 @@ export default function PermissionsScreen({ navigation }) {
             onValueChange={setAudioAlerts}
           />
           <PermissionRow
+            styles={styles}
+            colors={colors}
             icon="cloud-outline"
             title="Internet (Gemini on PC server)"
             description="Sends frames to your PC for optional Gemini enrichment."
@@ -208,11 +219,11 @@ export default function PermissionsScreen({ navigation }) {
         accessibilityLabel="Continue"
       >
         {busyKey === 'continue' ? (
-          <ActivityIndicator color={COLORS.btnText} />
+          <ActivityIndicator color={colors.btnText} />
         ) : (
           <>
             <Text style={styles.primaryBtnText}>Continue</Text>
-            <MaterialCommunityIcons name="arrow-right" size={22} color={COLORS.btnText} />
+            <MaterialCommunityIcons name="arrow-right" size={22} color={colors.btnText} />
           </>
         )}
       </Pressable>
@@ -220,85 +231,87 @@ export default function PermissionsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: COLORS.bg,
-    paddingHorizontal: LAYOUT.screenPaddingH,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scroll: {
-    paddingTop: 8,
-    paddingBottom: 16,
-    flexGrow: 1,
-  },
-  title: {
-    color: COLORS.white,
-    fontSize: 26,
-    fontFamily: FONTS.en.extrabold,
-    marginBottom: 8,
-  },
-  subtitle: {
-    color: COLORS.tealBright,
-    fontSize: 15,
-    lineHeight: 22,
-    marginBottom: 24,
-    fontFamily: FONTS.en.regular,
-  },
-  list: {
-    gap: 14,
-  },
-  rowCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.borderMuted,
-    borderRadius: LAYOUT.cardRadius,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    backgroundColor: COLORS.bgElevated,
-    gap: 12,
-  },
-  iconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: 'rgba(45, 212, 191, 0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowText: {
-    flex: 1,
-  },
-  rowTitle: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontFamily: FONTS.en.bold,
-    marginBottom: 4,
-  },
-  rowDesc: {
-    color: COLORS.grey,
-    fontSize: 13,
-    lineHeight: 18,
-    fontFamily: FONTS.en.regular,
-  },
-  primaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: COLORS.teal,
-    borderRadius: LAYOUT.buttonRadius,
-    paddingVertical: 16,
-    minHeight: 56,
-    marginTop: 12,
-  },
-  pressed: { opacity: 0.92 },
-  primaryBtnText: {
-    color: COLORS.btnText,
-    fontSize: 17,
-    fontFamily: FONTS.en.extrabold,
-  },
-});
+function createPermissionsStyles(colors) {
+  return StyleSheet.create({
+    root: {
+      flex: 1,
+      backgroundColor: colors.bg,
+      paddingHorizontal: LAYOUT.screenPaddingH,
+    },
+    scrollView: {
+      flex: 1,
+    },
+    scroll: {
+      paddingTop: 8,
+      paddingBottom: 16,
+      flexGrow: 1,
+    },
+    title: {
+      color: colors.white,
+      fontSize: 26,
+      fontFamily: FONTS.en.extrabold,
+      marginBottom: 8,
+    },
+    subtitle: {
+      color: colors.tealBright,
+      fontSize: 15,
+      lineHeight: 22,
+      marginBottom: 24,
+      fontFamily: FONTS.en.regular,
+    },
+    list: {
+      gap: 14,
+    },
+    rowCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.borderMuted,
+      borderRadius: LAYOUT.cardRadius,
+      paddingVertical: 12,
+      paddingHorizontal: 12,
+      backgroundColor: colors.bgElevated,
+      gap: 12,
+    },
+    iconWrap: {
+      width: 44,
+      height: 44,
+      borderRadius: 12,
+      backgroundColor: colors.headerBackCircle,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    rowText: {
+      flex: 1,
+    },
+    rowTitle: {
+      color: colors.white,
+      fontSize: 16,
+      fontFamily: FONTS.en.bold,
+      marginBottom: 4,
+    },
+    rowDesc: {
+      color: colors.grey,
+      fontSize: 13,
+      lineHeight: 18,
+      fontFamily: FONTS.en.regular,
+    },
+    primaryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: colors.teal,
+      borderRadius: LAYOUT.buttonRadius,
+      paddingVertical: 16,
+      minHeight: 56,
+      marginTop: 12,
+    },
+    pressed: { opacity: 0.92 },
+    primaryBtnText: {
+      color: colors.btnText,
+      fontSize: 17,
+      fontFamily: FONTS.en.extrabold,
+    },
+  });
+}

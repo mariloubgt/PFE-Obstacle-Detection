@@ -1,4 +1,5 @@
 import { DEFAULTS } from './appSettings';
+import { normalizeSpeechRate } from './speakAlert';
 import { ttsVolumeOptions } from './ttsVolumeOptions';
 
 /**
@@ -7,10 +8,11 @@ import { ttsVolumeOptions } from './ttsVolumeOptions';
  * @param {number} [speechRate]
  */
 export function buildTtsOptions(alertVolume01, speechRate) {
-  const rate =
+  const raw =
     typeof speechRate === 'number' && !Number.isNaN(speechRate)
       ? speechRate
       : DEFAULTS.speechRate;
+  const rate = normalizeSpeechRate(raw);
   return {
     language: 'en-US',
     rate,

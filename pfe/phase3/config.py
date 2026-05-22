@@ -10,7 +10,37 @@ ENABLE_GEMINI = os.getenv("ENABLE_GEMINI", "1").strip().lower() in ("1", "true",
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # --- YOLO CONFIG ---
-YOLO_WEIGHTS = str(Path(__file__).parents[2] / "models" / "best.pt")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _pick_weights(env_key: str, candidates: tuple[Path, ...]) -> str:
+    env = (os.getenv(env_key) or "").strip()
+    if env:
+        return env
+    for p in candidates:
+        if p.is_file():
+            return str(p)
+    return str(candidates[0])
+
+
+# Outdoor / OOD model
+YOLO_WEIGHTS = _pick_weights(
+    "YOLO_WEIGHTS",
+    (
+        _PROJECT_ROOT / "best.pt",
+        _PROJECT_ROOT / "models" / "best.pt",
+    ),
+)
+# Indoor model (second head — merged at inference)
+YOLO_WEIGHTS_INDOOR = _pick_weights(
+    "YOLO_WEIGHTS_INDOOR",
+    (
+        _PROJECT_ROOT / "best indoor.pt",
+        _PROJECT_ROOT / "best_indoor.pt",
+        _PROJECT_ROOT / "models" / "best_indoor.pt",
+        _PROJECT_ROOT / "models" / "best indoor.pt",
+    ),
+)
 YOLO_CONF    = 0.40
 YOLO_IOU     = 0.45
 IMG_SIZE     = 832 

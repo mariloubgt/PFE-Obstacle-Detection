@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
@@ -9,10 +10,11 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS, LAYOUT } from '../constants/theme';
+import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
+import { useThemeColors } from '../contexts/ThemeContext';
 
-function FeatureCard({ iconName, iconColor, iconBg, title, subtitle }) {
+function FeatureCard({ styles, iconName, iconColor, iconBg, title, subtitle }) {
   return (
     <View style={styles.card} accessibilityRole="summary">
       <View style={[styles.iconCircle, { backgroundColor: iconBg }]}>
@@ -28,6 +30,8 @@ function FeatureCard({ iconName, iconColor, iconBg, title, subtitle }) {
 
 export default function WelcomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => createWelcomeStyles(colors), [colors]);
 
   return (
     <View
@@ -39,7 +43,7 @@ export default function WelcomeScreen({ navigation }) {
         },
       ]}
     >
-      <StatusBar style="light" />
+      <StatusBar style={colors.statusBarStyle} />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -65,6 +69,7 @@ export default function WelcomeScreen({ navigation }) {
 
         <View style={styles.cardsBlock}>
           <FeatureCard
+            styles={styles}
             iconName="eye"
             iconColor="#4ADE80"
             iconBg="#14532D"
@@ -72,6 +77,7 @@ export default function WelcomeScreen({ navigation }) {
             subtitle="YOLO + depth awareness"
           />
           <FeatureCard
+            styles={styles}
             iconName="microphone"
             iconColor="#C084FC"
             iconBg="#4C1D95"
@@ -79,6 +85,7 @@ export default function WelcomeScreen({ navigation }) {
             subtitle="Powered by Gemini AI"
           />
           <FeatureCard
+            styles={styles}
             iconName="lightning-bolt"
             iconColor="#FB923C"
             iconBg="#7C2D12"
@@ -94,7 +101,7 @@ export default function WelcomeScreen({ navigation }) {
           accessibilityLabel="Continue to app setup"
         >
           <Text style={styles.primaryBtnText}>Set up the app</Text>
-          <MaterialCommunityIcons name="arrow-right" size={22} color={COLORS.btnText} />
+          <MaterialCommunityIcons name="arrow-right" size={22} color={colors.btnText} />
         </Pressable>
 
         <Pressable
@@ -110,107 +117,109 @@ export default function WelcomeScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: COLORS.bg,
-  },
-  scrollContent: {
-    paddingHorizontal: LAYOUT.screenPaddingH,
-    paddingTop: 4,
-    paddingBottom: 28,
-  },
-  logoFrame: {
-    alignSelf: 'center',
-    width: 112,
-    height: 112,
-    marginTop: 8,
-    marginBottom: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoImage: {
-    width: '100%',
-    height: '100%',
-  },
-  appName: {
-    textAlign: 'center',
-    color: COLORS.white,
-    fontSize: 28,
-    letterSpacing: 0.5,
-    marginBottom: 8,
-    fontFamily: FONTS.en.extrabold,
-  },
-  taglineEn: {
-    textAlign: 'center',
-    color: COLORS.tealBright,
-    fontSize: 15,
-    lineHeight: 22,
-    paddingHorizontal: 4,
-    marginBottom: 10,
-    fontFamily: FONTS.en.medium,
-  },
-  cardsBlock: {
-    gap: 12,
-    marginBottom: 28,
-  },
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.bgElevated,
-    borderWidth: 1,
-    borderColor: COLORS.borderMuted,
-    borderRadius: LAYOUT.cardRadius,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    gap: 14,
-  },
-  iconCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardText: {
-    flex: 1,
-  },
-  cardTitle: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontFamily: FONTS.en.bold,
-    marginBottom: 4,
-  },
-  cardSubtitle: {
-    color: COLORS.tealBright,
-    fontSize: 13,
-    fontFamily: FONTS.en.medium,
-  },
-  primaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: COLORS.teal,
-    borderRadius: LAYOUT.buttonRadius,
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    minHeight: 56,
-    marginBottom: 16,
-  },
-  pressed: { opacity: 0.92 },
-  primaryBtnText: {
-    color: COLORS.btnText,
-    fontSize: 17,
-    fontFamily: FONTS.en.extrabold,
-  },
-  secondaryWrap: {
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  secondaryLink: {
-    color: COLORS.teal,
-    fontSize: 15,
-    fontFamily: FONTS.en.semibold,
-  },
-});
+function createWelcomeStyles(colors) {
+  return StyleSheet.create({
+    root: {
+      flex: 1,
+      backgroundColor: colors.bg,
+    },
+    scrollContent: {
+      paddingHorizontal: LAYOUT.screenPaddingH,
+      paddingTop: 4,
+      paddingBottom: 28,
+    },
+    logoFrame: {
+      alignSelf: 'center',
+      width: 112,
+      height: 112,
+      marginTop: 8,
+      marginBottom: 20,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    logoImage: {
+      width: '100%',
+      height: '100%',
+    },
+    appName: {
+      textAlign: 'center',
+      color: colors.white,
+      fontSize: 28,
+      letterSpacing: 0.5,
+      marginBottom: 8,
+      fontFamily: FONTS.en.extrabold,
+    },
+    taglineEn: {
+      textAlign: 'center',
+      color: colors.tealBright,
+      fontSize: 15,
+      lineHeight: 22,
+      paddingHorizontal: 4,
+      marginBottom: 10,
+      fontFamily: FONTS.en.medium,
+    },
+    cardsBlock: {
+      gap: 12,
+      marginBottom: 28,
+    },
+    card: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.bgElevated,
+      borderWidth: 1,
+      borderColor: colors.borderMuted,
+      borderRadius: LAYOUT.cardRadius,
+      paddingVertical: 14,
+      paddingHorizontal: 14,
+      gap: 14,
+    },
+    iconCircle: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    cardText: {
+      flex: 1,
+    },
+    cardTitle: {
+      color: colors.white,
+      fontSize: 16,
+      fontFamily: FONTS.en.bold,
+      marginBottom: 4,
+    },
+    cardSubtitle: {
+      color: colors.tealBright,
+      fontSize: 13,
+      fontFamily: FONTS.en.medium,
+    },
+    primaryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: colors.teal,
+      borderRadius: LAYOUT.buttonRadius,
+      paddingVertical: 16,
+      paddingHorizontal: 24,
+      minHeight: 56,
+      marginBottom: 16,
+    },
+    pressed: { opacity: 0.92 },
+    primaryBtnText: {
+      color: colors.btnText,
+      fontSize: 17,
+      fontFamily: FONTS.en.extrabold,
+    },
+    secondaryWrap: {
+      alignItems: 'center',
+      paddingVertical: 8,
+    },
+    secondaryLink: {
+      color: colors.teal,
+      fontSize: 15,
+      fontFamily: FONTS.en.semibold,
+    },
+  });
+}

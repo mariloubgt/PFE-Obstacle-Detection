@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import * as ExpoCamera from 'expo-camera';
 import * as Haptics from 'expo-haptics';
@@ -23,12 +23,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DangerAlertModal from '../components/DangerAlertModal';
 import DetectionOverlay from '../components/DetectionOverlay';
 import { predictImage } from '../services/predict';
-import { COLORS } from '../constants/theme';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
 import { buildTtsOptions } from '../utils/buildTtsOptions';
+import { speakAlert } from '../utils/speakAlert';
 import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
 import { pickCloseThreat } from '../utils/evaluateCloseThreat';
 import { isSimulatorDevice } from '../utils/isSimulator';
@@ -49,6 +50,7 @@ const ENGLISH_SPEECH_LABEL = {
   car: 'a car',
   motorcycle: 'a motorcycle',
   bus: 'a bus',
+  bus_stop: 'a bus stop',
   truck: 'a truck',
   dog: 'a dog',
   bench: 'a bench',
@@ -58,10 +60,14 @@ const ENGLISH_SPEECH_LABEL = {
   fire_hydrant: 'a fire hydrant',
   stop_sign: 'a stop sign',
   traffic_light: 'a traffic light',
+  street_light: 'a street light',
   tree: 'a tree',
   pole: 'a pole',
   waste_container: 'a trash bin',
   crutch: 'a crutch',
+  spherical_roadblock: 'a roadblock',
+  warning_column: 'a warning column',
+  train: 'a train',
 };
 
 function englishLabelForClass(name) {
@@ -109,17 +115,6 @@ function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.45) {
 }
 
 const SPEAK_MIN_GAP_MS = 4000;
-const NAV_GROQ_INTERVAL_MS = 4000;
-/** Speak scene/caption again when text changes, at most every this many ms */
-const SCENE_SPEAK_COOLDOWN_MS = 4500;
-const MAX_SCENE_TTS_CHARS = 220;
-
-function clipSceneForSpeech(text) {
-  if (!text || typeof text !== 'string') return '';
-  const t = text.trim();
-  if (t.length <= MAX_SCENE_TTS_CHARS) return t;
-  return `${t.slice(0, MAX_SCENE_TTS_CHARS - 3)}...`;
-}
 
 function formatMeters(m) {
   if (m == null || !Number.isFinite(m)) return null;
@@ -129,6 +124,8 @@ function formatMeters(m) {
 export default function MainNavigationScreen({ navigation }) {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => createMainNavStyles(colors), [colors]);
   const [permission, setPermission] = useState(null);
   const requestPermission = useCallback(async () => {
     const req =
@@ -177,16 +174,11 @@ export default function MainNavigationScreen({ navigation }) {
 
   const inFlightRef = useRef(false);
   const aiTestRef = useRef(false);
-  const navInFlightRef = useRef(false);
-  const lastNavGroqAtRef = useRef(0);
-  const lastNavTextRef = useRef('');
-  const lastNavSpokenAtRef = useRef(0);
   const lastEmergencyAtRef = useRef(0);
   const smoothStateRef = useRef({});
   const lastTtsKeyRef = useRef('');
   const lastSpeakAtRef = useRef(0);
-  const lastSpokenSceneTextRef = useRef('');
-  const lastSceneSpeakAtRef = useRef(0);
+  const hadObstacleRef = useRef(false);
   /** Lock TTS + overlay on one obstacle until another is clearly closer */
   const primaryLockRef = useRef(null);
   const manualSuppressRef = useRef(false);
@@ -259,16 +251,14 @@ export default function MainNavigationScreen({ navigation }) {
   const onActivateNavigation = useCallback(() => {
     if (aiTestRef.current) return;
     setAiTestEnabled(true);
-    Speech.stop();
-    Speech.speak('Navigation activated.', ttsOpts());
+    speakAlert('Navigation activated.', ttsOpts());
   }, [ttsOpts]);
 
   /** Voice command "stop navigation" → disable AI test. */
   const onStopNavigation = useCallback(() => {
     if (!aiTestRef.current) return;
     setAiTestEnabled(false);
-    Speech.stop();
-    Speech.speak('Navigation stopped.', ttsOpts());
+    speakAlert('Navigation stopped.', ttsOpts());
   }, [ttsOpts]);
 
   /** Sound / volume key / hotword → open Scene Query then call describe directly.
@@ -303,8 +293,7 @@ export default function MainNavigationScreen({ navigation }) {
       announceHandsFreeInitialized.current = true;
       return;
     }
-    Speech.stop();
-    Speech.speak(
+    speakAlert(
       handsFreeDescribe
         ? 'Hands-free phrase listening enabled.'
         : 'Hands-free phrase listening disabled.',
@@ -312,41 +301,34 @@ export default function MainNavigationScreen({ navigation }) {
     );
   }, [handsFreeDescribe]);
 
-  /** TTS: English obstacle line; prefers LLaVA guidance, then obstacle fallback. */
-  const speakEnglishNav = useCallback((data, smoothedDets) => {
-    if (!smoothedDets.length) return;
+  /** TTS only when YOLO sees an obstacle (silent when path is clear). */
+  const speakYoloDetection = useCallback((primaryOnly) => {
+    if (!primaryOnly.length) {
+      hadObstacleRef.current = false;
+      lastTtsKeyRef.current = '';
+      return;
+    }
+
+    const d0 = primaryOnly[0];
+    const dist = Math.max(0.2, Math.round((d0.distance_m || 0) * 10) / 10);
+    const obKey = `${d0.name}|${dist}`;
+
+    // Already spoke for this obstacle — stay silent until it changes or disappears.
+    if (obKey === lastTtsKeyRef.current) return;
+
     const now = Date.now();
-
-    const sorted = [...smoothedDets].sort(
-      (a, b) => (a.distance_m ?? 99) - (b.distance_m ?? 99)
-    );
-    const d0 = sorted[0];
-    const dist = Math.round((d0.distance_m || 0) * 2) / 2;
-    const label = englishLabelForClass(d0.name);
-    const labelSent = label.charAt(0).toUpperCase() + label.slice(1);
-    const unit = dist === 1 ? 'meter' : 'meters';
-    const obstaclePart = `${labelSent} at ${dist} ${unit}.`;
-
-    const llavaGuidance =
-      typeof data?.navigation?.guidance_en === 'string'
-        ? data.navigation.guidance_en.trim()
-        : '';
-    const navGuidance = llavaGuidance;
-    const msg = navGuidance
-      ? clipSceneForSpeech(navGuidance)
-      : obstaclePart;
-
     if (now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS) return;
 
-    const obKey = navGuidance
-      ? `nav|${msg}`
-      : `${label}|${dist}`;
-    if (obKey === lastTtsKeyRef.current) return;
+    const label = englishLabelForClass(d0.name);
+    const cx = ((d0.x1 ?? 0) + (d0.x2 ?? 1)) / 2;
+    const side = cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
+    const unit = dist === 1 ? 'meter' : 'meters';
+    const msg = `${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} ${unit} ${side}.`;
 
     lastTtsKeyRef.current = obKey;
     lastSpeakAtRef.current = now;
-    Speech.stop();
-    Speech.speak(msg, ttsOpts());
+    hadObstacleRef.current = true;
+    speakAlert(msg, { ...ttsOpts(), latest: true });
   }, [ttsOpts]);
 
   const onCameraTap = useCallback(() => {
@@ -385,53 +367,9 @@ export default function MainNavigationScreen({ navigation }) {
     const cx = ((closest.x1 ?? 0) + (closest.x2 ?? 1)) / 2;
     const side = cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
     const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
-    Speech.stop();
-    Speech.speak(msg, { ...ttsOpts(), pitch: 1.05 });
+    speakAlert(msg, { ...ttsOpts(), pitch: 1.05, interrupt: true });
     return true;
   }, [ttsOpts]);
-
-  /** Fire Groq navigate call on its own timer, independent of YOLO loop. */
-  const fireGroqNav = useCallback(async () => {
-    if (!aiTestRef.current) return;
-    if (navInFlightRef.current) return;
-    if (!cameraRef.current) return;
-    navInFlightRef.current = true;
-    try {
-      const api = await loadInferenceApiUrl();
-      if (!api) return;
-      // Take a fresh photo for Groq
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: prefsRef.current.lowLight ? 0.38 : 0.3,
-        skipProcessing: true,
-      });
-      if (!aiTestRef.current) return;
-      const po = predictOptsRef.current;
-      const data = await predictImage(api, photo.uri, {
-        hfovDeg: po.hfovDeg,
-        depthScale: po.depthScale,
-        useGemini: po.useGemini,
-        useGroq: true,
-        groqMode: 'navigate',
-      });
-      if (!aiTestRef.current) return;
-      const guidance =
-        typeof data?.groq?.guidance_en === 'string' ? data.groq.guidance_en.trim() : '';
-      if (!guidance) return;
-      const now = Date.now();
-      const isNew = guidance !== lastNavTextRef.current;
-      const tooLongSilent = now - lastNavSpokenAtRef.current > 12000;
-      // Speak if guidance changed OR 12s without speaking
-      if (!isNew && !tooLongSilent) return;
-      lastNavTextRef.current = guidance;
-      lastNavSpokenAtRef.current = now;
-      Speech.stop();
-      Speech.speak(guidance, ttsOpts());
-    } catch {
-      // ignore — nav is best-effort
-    } finally {
-      navInFlightRef.current = false;
-    }
-  }, []);
 
   // --- AI Loop (non-overlapping frames + smoothed distances) ---
   const runFrame = useCallback(async () => {
@@ -502,33 +440,26 @@ export default function MainNavigationScreen({ navigation }) {
         }
       }
 
-      speakEmergencyIfNeeded(primaryOnly);
+      if (!speakEmergencyIfNeeded(primaryOnly)) {
+        speakYoloDetection(primaryOnly);
+      }
     } catch (e) {
       if (aiTestRef.current) setInferenceError(e.message);
     } finally {
       inFlightRef.current = false;
     }
-  }, [speakEmergencyIfNeeded]);
+  }, [speakEmergencyIfNeeded, speakYoloDetection]);
 
   useEffect(() => {
     let yoloInterval = null;
-    let groqInterval = null;
     if (aiTestEnabled) {
       smoothStateRef.current = {};
       lastTtsKeyRef.current = '';
-      lastSpokenSceneTextRef.current = '';
-      lastSceneSpeakAtRef.current = 0;
+      hadObstacleRef.current = false;
       primaryLockRef.current = null;
-      lastNavGroqAtRef.current = 0;
-      lastNavTextRef.current = '';
-      lastNavSpokenAtRef.current = 0;
       lastEmergencyAtRef.current = 0;
-      // YOLO loop: fast, no Groq
       runFrame();
       yoloInterval = setInterval(runFrame, aiFrameMs);
-      // Groq nav loop: separate, slower timer
-      setTimeout(() => { void fireGroqNav(); }, 1500); // first call after 1.5s
-      groqInterval = setInterval(() => { void fireGroqNav(); }, NAV_GROQ_INTERVAL_MS);
     } else {
       Speech.stop();
       lastTtsKeyRef.current = '';
@@ -542,9 +473,8 @@ export default function MainNavigationScreen({ navigation }) {
     }
     return () => {
       if (yoloInterval) clearInterval(yoloInterval);
-      if (groqInterval) clearInterval(groqInterval);
     };
-  }, [aiTestEnabled, aiFrameMs, runFrame, fireGroqNav]);
+  }, [aiTestEnabled, aiFrameMs, runFrame]);
 
   const onDangerBack = useCallback(() => {
     setDangerPayload(null);
@@ -562,7 +492,7 @@ export default function MainNavigationScreen({ navigation }) {
   if (!permission?.granted) {
       return (
         <View style={styles.placeholder}>
-            <MaterialCommunityIcons name="camera-off-outline" size={48} color={COLORS.grey} />
+            <MaterialCommunityIcons name="camera-off-outline" size={48} color={colors.grey} />
             <Text style={styles.placeholderTitle}>Camera access required</Text>
             <TouchableOpacity style={styles.allowBtn} onPress={requestPermission}>
                 <Text style={styles.allowBtnText}>Allow Camera</Text>
@@ -573,12 +503,12 @@ export default function MainNavigationScreen({ navigation }) {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
-      <StatusBar style="light" />
+      <StatusBar style={colors.statusBarStyle} />
 
       {/* TOP NAVIGATION BAR */}
       <View style={styles.topBar}>
         <Pressable onPress={handleGoBack} style={styles.topIcon}>
-          <MaterialCommunityIcons name="chevron-left" size={28} color={COLORS.teal} />
+          <MaterialCommunityIcons name="chevron-left" size={28} color={colors.teal} />
         </Pressable>
         <Text style={styles.time}>{clock}</Text>
         <View style={styles.topRight}>
@@ -598,8 +528,7 @@ export default function MainNavigationScreen({ navigation }) {
               }
               const next = !aiTestEnabled;
               setAiTestEnabled(next);
-              Speech.stop();
-              Speech.speak(next ? 'Navigation activated.' : 'Navigation stopped.', ttsOpts());
+              speakAlert(next ? 'Navigation activated.' : 'Navigation stopped.', ttsOpts());
             }}
             accessibilityRole="button"
             accessibilityState={{ selected: aiTestEnabled }}
@@ -614,7 +543,7 @@ export default function MainNavigationScreen({ navigation }) {
                 : 'Starts YOLO obstacle detection plus Groq detailed navigation instructions.'
             }
           >
-            <MaterialCommunityIcons name="brain" size={15} color={aiTestEnabled ? COLORS.btnText : COLORS.teal} />
+            <MaterialCommunityIcons name="brain" size={15} color={aiTestEnabled ? colors.btnText : colors.teal} />
             <Text style={[styles.aiPillText, aiTestEnabled && styles.aiPillTextOn]}>AI test</Text>
           </Pressable>
           <Pressable
@@ -630,7 +559,7 @@ export default function MainNavigationScreen({ navigation }) {
             accessibilityLabel="Describe environment scene summary"
             accessibilityHint="Opens Scene Query with a fresh scene description, same as the Sound tab."
           >
-            <MaterialCommunityIcons name="microphone-outline" size={15} color={COLORS.teal} />
+            <MaterialCommunityIcons name="microphone-outline" size={15} color={colors.teal} />
             <Text style={styles.aiPillText}>Describe</Text>
           </Pressable>
         </View>
@@ -679,7 +608,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityRole="button"
           accessibilityLabel="Switch front or back camera"
         >
-          <MaterialCommunityIcons name="camera-flip-outline" size={22} color={COLORS.white} />
+          <MaterialCommunityIcons name="camera-flip-outline" size={22} color={colors.white} />
         </Pressable>
 
         <Pressable
@@ -699,7 +628,7 @@ export default function MainNavigationScreen({ navigation }) {
           <MaterialCommunityIcons
             name={torch ? 'flashlight' : 'flashlight-off'}
             size={24}
-            color={COLORS.white}
+            color={colors.white}
           />
         </Pressable>
       </View>
@@ -711,7 +640,7 @@ export default function MainNavigationScreen({ navigation }) {
         <MaterialCommunityIcons
           name={aiTestEnabled ? 'brain' : 'alert-circle-outline'}
           size={22}
-          color={aiTestEnabled ? COLORS.teal : COLORS.grey}
+          color={aiTestEnabled ? colors.teal : colors.grey}
           style={styles.alertCardIcon}
         />
         <View style={styles.alertTextCol}>
@@ -788,7 +717,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityLabel="Scene description — opens Scene Query"
           accessibilityHint="Opens Scene Query and reads a scene description. Press and hold to open alert volume slider."
         >
-          <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
+          <MaterialCommunityIcons name="volume-high" size={26} color={colors.tealBright} />
           <Text style={styles.navLabel}>Sound</Text>
         </Pressable>
 
@@ -799,7 +728,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityLabel="Scene descriptions"
           accessibilityHint="Opens the scene description chat. Use Describe scene for a fresh summary."
         >
-          <MaterialCommunityIcons name="chart-box-outline" size={30} color={COLORS.btnText} />
+          <MaterialCommunityIcons name="chart-box-outline" size={30} color={colors.btnText} />
         </Pressable>
 
         <Pressable
@@ -809,7 +738,7 @@ export default function MainNavigationScreen({ navigation }) {
           accessibilityLabel="Settings"
           accessibilityHint="Shortcuts for volume keys describe and hands-free phrase"
         >
-          <MaterialCommunityIcons name="cog-outline" size={26} color={COLORS.tealBright} />
+          <MaterialCommunityIcons name="cog-outline" size={26} color={colors.tealBright} />
           <Text style={styles.navLabel}>Settings</Text>
         </Pressable>
       </View>
@@ -826,9 +755,9 @@ export default function MainNavigationScreen({ navigation }) {
                onSlidingComplete={onAlertVolumeSliderComplete}
                minimumValue={0}
                maximumValue={1}
-               minimumTrackTintColor={COLORS.teal}
-               maximumTrackTintColor={COLORS.borderMuted}
-               thumbTintColor={COLORS.teal}
+               minimumTrackTintColor={colors.teal}
+               maximumTrackTintColor={colors.borderMuted}
+               thumbTintColor={colors.teal}
             />
             <TouchableOpacity style={styles.modalDone} onPress={() => setVolumeOpen(false)}>
               <Text style={styles.modalDoneText}>DONE</Text>
@@ -848,18 +777,19 @@ export default function MainNavigationScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.bg },
+function createMainNavStyles(colors) {
+  return StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, height: 60 },
-  time: { color: 'white', fontSize: 18, fontWeight: '700', letterSpacing: -0.5 },
+  time: { color: colors.topBarText, fontSize: 18, fontWeight: '700', letterSpacing: -0.5 },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   livePill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, gap: 6 },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444' },
-  liveText: { color: 'white', fontSize: 11, fontWeight: '800' },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.danger },
+  liveText: { color: colors.overlayIcon, fontSize: 11, fontWeight: '800' },
   aiPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 6, borderWidth: 1, borderColor: 'rgba(20,184,166,0.3)' },
-  aiPillOn: { backgroundColor: COLORS.teal, borderColor: COLORS.teal },
-  aiPillText: { color: COLORS.teal, fontSize: 12, fontWeight: '700' },
-  aiPillTextOn: { color: COLORS.btnText },
+  aiPillOn: { backgroundColor: colors.teal, borderColor: colors.teal },
+  aiPillText: { color: colors.teal, fontSize: 12, fontWeight: '700' },
+  aiPillTextOn: { color: colors.btnText },
   aiPillPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
   visionArea: { flex: 1, marginHorizontal: 15, marginVertical: 10, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111' },
   cameraTouchable: { flex: 1 },
@@ -877,7 +807,7 @@ const styles = StyleSheet.create({
     zIndex: 25,
   },
   simBannerText: {
-    color: COLORS.tealBright,
+    color: colors.tealBright,
     fontSize: 12,
     lineHeight: 16,
     textAlign: 'center',
@@ -916,14 +846,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     margin: 20,
     padding: 20,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: colors.alertCardBg,
     borderRadius: 24,
     alignItems: 'flex-start',
     gap: 15,
   },
   alertCardIcon: { marginTop: 2 },
   cardSectionLabel: {
-    color: COLORS.grey,
+    color: colors.grey,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.4,
@@ -933,11 +863,11 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.en.semibold,
   },
   cardSectionLabelFirst: { marginTop: 0 },
-  alertTitle: { color: 'white', fontSize: 17, fontWeight: '700' },
-  alertSub: { color: COLORS.grey, fontSize: 13 },
-  voiceHint: { color: COLORS.tealBright, fontSize: 12, marginTop: 10, lineHeight: 18 },
+  alertTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
+  alertSub: { color: colors.grey, fontSize: 13 },
+  voiceHint: { color: colors.tealBright, fontSize: 12, marginTop: 10, lineHeight: 18 },
   voiceContextHint: {
-    color: COLORS.tealBright,
+    color: colors.tealBright,
     fontSize: 14,
     fontWeight: '600',
     marginTop: 2,
@@ -945,23 +875,23 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.en.regular,
   },
   sceneDistanceLine: {
-    color: COLORS.white,
+    color: colors.text,
     fontSize: 13,
     marginTop: 8,
     fontFamily: FONTS.en.medium,
   },
   sceneDistanceEm: {
-    color: COLORS.tealBright,
+    color: colors.tealBright,
     fontWeight: '800',
     fontFamily: FONTS.en.extrabold,
   },
-  inferenceMeta: { color: COLORS.grey, fontSize: 11, marginTop: 2, lineHeight: 16 },
-  inferenceErr: { color: COLORS.danger, fontSize: 12 },
+  inferenceMeta: { color: colors.grey, fontSize: 11, marginTop: 2, lineHeight: 16 },
+  inferenceErr: { color: colors.danger, fontSize: 12 },
   bottomNav: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    backgroundColor: 'rgba(15,23,42,0.95)',
+    backgroundColor: colors.navBarBg,
     paddingVertical: 10,
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
@@ -970,15 +900,16 @@ const styles = StyleSheet.create({
   },
   navItem: { alignItems: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 12 },
   navPressed: { opacity: 0.72 },
-  navLabel: { color: COLORS.grey, fontSize: 10, fontWeight: '600' },
-  centerFab: { width: 64, height: 64, borderRadius: 32, backgroundColor: COLORS.teal, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: COLORS.teal, shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  navLabel: { color: colors.grey, fontSize: 10, fontWeight: '600' },
+  centerFab: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.teal, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: colors.teal, shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
-  modalCard: { width: '80%', backgroundColor: '#1E293B', padding: 25, borderRadius: 30, alignItems: 'center' },
-  modalTitle: { color: 'white', fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
-  modalDone: { marginTop: 20, backgroundColor: COLORS.teal, paddingHorizontal: 30, paddingVertical: 12, borderRadius: 15 },
-  modalDoneText: { color: COLORS.btnText, fontWeight: 'bold' },
-  placeholder: { flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center', padding: 40 },
-  placeholderTitle: { color: 'white', fontSize: 18, marginVertical: 20, textAlign: 'center' },
-  allowBtn: { backgroundColor: COLORS.teal, paddingHorizontal: 25, paddingVertical: 15, borderRadius: 15 },
-  allowBtnText: { color: 'white', fontWeight: 'bold' }
+  modalCard: { width: '80%', backgroundColor: colors.bgElevated, padding: 25, borderRadius: 30, alignItems: 'center' },
+  modalTitle: { color: colors.text, fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
+  modalDone: { marginTop: 20, backgroundColor: colors.teal, paddingHorizontal: 30, paddingVertical: 12, borderRadius: 15 },
+  modalDoneText: { color: colors.btnText, fontWeight: 'bold' },
+  placeholder: { flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center', padding: 40 },
+  placeholderTitle: { color: colors.text, fontSize: 18, marginVertical: 20, textAlign: 'center' },
+  allowBtn: { backgroundColor: colors.teal, paddingHorizontal: 25, paddingVertical: 15, borderRadius: 15 },
+  allowBtnText: { color: colors.btnText, fontWeight: 'bold' }
 });
+}

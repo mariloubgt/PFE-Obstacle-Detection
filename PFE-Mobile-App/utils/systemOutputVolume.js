@@ -1,12 +1,10 @@
 import { NativeModules, Platform } from 'react-native';
 
 /**
- * Single source of truth for:
- * - real device output level (same stream as side buttons)
- * - level to restore after volume-key “describe” shortcut
+ * Single source of truth for alert loudness preference (0–1).
+ * On iOS we do NOT call VolumeManager.setVolume — it hijacks MPVolumeView and breaks TTS routing.
  */
 export const alertOutputState = {
-  /** 0–1 — always matches what user set in Settings / slider (not a stale getVolume snapshot). */
   baseline01: 0.8,
 };
 
@@ -16,24 +14,21 @@ function clamp01(v) {
 }
 
 /**
- * Push level to system + update baseline used when hardware keys are restored.
+ * Store alert volume preference. User adjusts real loudness with iPhone side buttons.
  * @param {number} volume01
  */
 export async function applyAlertVolumeToSystemOutput(volume01) {
-  const v = clamp01(volume01);
-  alertOutputState.baseline01 = v;
+  alertOutputState.baseline01 = clamp01(volume01);
 
   if (Platform.OS === 'web') return;
+  if (Platform.OS === 'ios') return;
+
   if (!NativeModules.VolumeManager) return;
 
   try {
-    // eslint-disable-next-line global-require
     const mod = require('react-native-volume-manager');
-    if (Platform.OS === 'ios' && typeof mod.enable === 'function') {
-      await Promise.resolve(mod.enable(true, true)).catch(() => {});
-    }
     if (typeof mod.setVolume !== 'function') return;
-    await mod.setVolume(v, {
+    await mod.setVolume(alertOutputState.baseline01, {
       playSound: false,
       type: 'music',
       showUI: false,
@@ -43,10 +38,6 @@ export async function applyAlertVolumeToSystemOutput(volume01) {
   }
 }
 
-/**
- * Slider dragging: smooth updates without waiting on AsyncStorage.
- * Same as apply — baseline stays aligned while sliding.
- */
 export function stageAlertVolumeLive(volume01) {
   return applyAlertVolumeToSystemOutput(volume01);
 }

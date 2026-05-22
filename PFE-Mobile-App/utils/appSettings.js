@@ -16,7 +16,7 @@ import {
 import { APPEARANCE } from '../constants/theme';
 
 export const DEFAULTS = {
-  speechRate: 0.6,
+  speechRate: 0.95,
   vibrationDanger: true,
   dangerThresholdM: 0.8,
   aiFrameMs: 1000,

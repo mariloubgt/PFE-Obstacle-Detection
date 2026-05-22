@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
@@ -7,8 +7,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ExpoCamera from 'expo-camera';
-import { COLORS, LAYOUT } from '../constants/theme';
+import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { predictImage } from '../services/predict';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
@@ -16,6 +17,7 @@ import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
 import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { buildTtsOptions } from '../utils/buildTtsOptions';
+import { speakAlert, stopSpeech } from '../utils/speakAlert';
 import { describeFromDetections } from '../utils/describeFromDetections';
 import { isSimulatorDevice } from '../utils/isSimulator';
 
@@ -42,6 +44,8 @@ function formatTime(d = new Date()) {
 
 export default function SceneQueryScreen({ navigation }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => createSceneQueryStyles(colors), [colors]);
   const scrollRef = useRef(null);
   const cameraRef = useRef(null);
   /** Latest describe request wins; older runs exit before speaking / appending. */
@@ -57,11 +61,7 @@ export default function SceneQueryScreen({ navigation }) {
   const prefsRef = useRef(DEFAULTS);
 
   const speakReply = useCallback((text) => {
-    Speech.stop();
-    Speech.speak(
-      text,
-      buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate)
-    );
+    speakAlert(text, buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate));
   }, []);
 
   useEffect(() => {
@@ -104,17 +104,15 @@ export default function SceneQueryScreen({ navigation }) {
 
   const runGroqDescribe = useCallback(async () => {
     const generation = ++describeGenerationRef.current;
+    stopSpeech();
     const stale = () => generation !== describeGenerationRef.current;
     setIsTyping(true);
 
-    Speech.stop();
-
     try {
       if (stale()) return;
-      Speech.speak(
-        'Describing.',
-        buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate)
-      );
+      if (Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      }
 
       let granted = camPermission?.granted === true;
       if (!granted) {
@@ -176,7 +174,11 @@ export default function SceneQueryScreen({ navigation }) {
       prefsRef.current = prefs;
       let data;
       try {
-        data = await predictImage(api, photo.uri, predictOpts);
+        data = await predictImage(api, photo.uri, {
+          ...predictOpts,
+          useGroq: false,
+          useGemini: false,
+        });
       } catch (netErr) {
         if (stale()) return;
         const msg =
@@ -191,34 +193,15 @@ export default function SceneQueryScreen({ navigation }) {
 
       if (stale()) return;
 
-      const groqScene = typeof data?.groq?.scene === 'string' ? data.groq.scene.trim() : '';
-      const groqGuidance =
-        typeof data?.groq?.guidance_en === 'string' ? data.groq.guidance_en.trim() : '';
-      const groqErr = data?.groq?.error;
-      const sceneFallback =
-        typeof data?.scene?.top5?.[0]?.label === 'string'
-          ? data.scene.top5[0].label.trim()
-          : '';
-      const geminiLine =
-        typeof data?.gemini?.darija === 'string' && data.gemini.darija.trim()
-          ? data.gemini.darija.trim()
-          : typeof data?.gemini?.focus === 'string' && data.gemini.focus.trim()
-            ? data.gemini.focus.trim()
-            : '';
-      const detFallback = describeFromDetections(data?.detections);
-      const groqCombined = [groqScene, groqGuidance].filter(Boolean).join(' ').trim();
-      const toSpeak =
-        groqCombined ||
-        geminiLine ||
-        sceneFallback ||
-        (groqErr && String(groqErr).includes('GROQ_API_KEY')
-          ? `${detFallback} Set GROQ_API_KEY on your PC and restart the inference server.`
-          : groqErr
-            ? `Could not describe the scene. ${groqErr}`
-            : detFallback);
+      const visible = (data?.detections || []).filter(
+        (d) => typeof d?.distance_m === 'number' && d.distance_m < 5
+      );
+      const toSpeak = describeFromDetections(visible);
 
       appendMessage({ id: nextId(), role: 'assistant', text: toSpeak });
-      speakReply(toSpeak);
+      if (visible.length > 0) {
+        speakReply(toSpeak);
+      }
     } finally {
       if (generation === describeGenerationRef.current) {
         setIsTyping(false);
@@ -276,7 +259,7 @@ export default function SceneQueryScreen({ navigation }) {
         },
       ]}
     >
-      <StatusBar style="light" />
+      <StatusBar style={colors.statusBarStyle} />
 
       <View style={styles.header}>
         <Pressable
@@ -286,7 +269,7 @@ export default function SceneQueryScreen({ navigation }) {
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
-          <MaterialCommunityIcons name="chevron-left" size={28} color={COLORS.teal} />
+          <MaterialCommunityIcons name="chevron-left" size={28} color={colors.teal} />
         </Pressable>
         <Text style={styles.headerTitle}>Scene description</Text>
         <Pressable
@@ -302,7 +285,7 @@ export default function SceneQueryScreen({ navigation }) {
           accessibilityLabel="Sound"
           accessibilityHint="Same as Sound on main navigation: captures the scene and reads a new description."
         >
-          <MaterialCommunityIcons name="volume-high" size={26} color={COLORS.tealBright} />
+          <MaterialCommunityIcons name="volume-high" size={26} color={colors.tealBright} />
         </Pressable>
       </View>
 
@@ -325,7 +308,7 @@ export default function SceneQueryScreen({ navigation }) {
             accessibilityRole="button"
             accessibilityLabel="Allow camera for scene descriptions"
           >
-            <MaterialCommunityIcons name="camera-outline" size={28} color={COLORS.tealBright} />
+            <MaterialCommunityIcons name="camera-outline" size={28} color={colors.tealBright} />
             <Text style={styles.camOverlayTitle}>Allow camera</Text>
             <Text style={styles.camOverlaySub}>Needed to grab a photo for describing</Text>
           </Pressable>
@@ -351,7 +334,7 @@ export default function SceneQueryScreen({ navigation }) {
         accessibilityLabel="Describe scene"
         accessibilityHint="Takes a photo and reads a summary. Same shortcut as Sound on navigation."
       >
-        <MaterialCommunityIcons name="image-text" size={20} color={COLORS.btnText} />
+        <MaterialCommunityIcons name="image-text" size={20} color={colors.btnText} />
         <Text style={styles.describeSceneBtnText}>Describe scene</Text>
       </Pressable>
 
@@ -424,7 +407,7 @@ export default function SceneQueryScreen({ navigation }) {
             navigation.goBack();
           }}
         >
-          <MaterialCommunityIcons name="arrow-left" size={20} color={COLORS.teal} />
+          <MaterialCommunityIcons name="arrow-left" size={20} color={colors.teal} />
           <Text style={styles.backNavText}>Back to Nav</Text>
         </Pressable>
       </View>
@@ -432,10 +415,11 @@ export default function SceneQueryScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+function createSceneQueryStyles(colors) {
+  return StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: COLORS.bg,
+    backgroundColor: colors.bg,
     paddingHorizontal: LAYOUT.screenPaddingH,
   },
   header: {
@@ -448,13 +432,13 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
     flex: 1,
-    color: COLORS.white,
+    color: colors.white,
     fontSize: 20,
     fontFamily: FONTS.en.bold,
   },
@@ -462,7 +446,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: COLORS.bgElevated,
+    backgroundColor: colors.bgElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -471,7 +455,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: COLORS.teal,
+    backgroundColor: colors.teal,
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: LAYOUT.buttonRadius,
@@ -480,7 +464,7 @@ const styles = StyleSheet.create({
   },
   describeSceneBtnDisabled: { opacity: 0.55 },
   describeSceneBtnText: {
-    color: COLORS.btnText,
+    color: colors.btnText,
     fontSize: 15,
     fontFamily: FONTS.en.bold,
   },
@@ -496,23 +480,23 @@ const styles = StyleSheet.create({
     borderRadius: 16,
   },
   bubbleUser: {
-    backgroundColor: COLORS.teal,
+    backgroundColor: colors.messageBubbleUser,
     borderBottomRightRadius: 4,
   },
   bubbleBot: {
-    backgroundColor: '#1E293B',
+    backgroundColor: colors.messageBubbleAssistant,
     borderBottomLeftRadius: 4,
   },
   bubbleText: {
-    color: COLORS.white,
+    color: colors.white,
     fontSize: 15,
     lineHeight: 22,
   },
   bubbleTextUser: {
-    color: COLORS.btnText,
+    color: colors.btnText,
   },
   timeText: {
-    color: COLORS.grey,
+    color: colors.grey,
     fontSize: 11,
     marginTop: 8,
     fontFamily: FONTS.en.regular,
@@ -525,7 +509,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#1E293B',
+    backgroundColor: colors.messageBubbleAssistant,
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 16,
@@ -534,7 +518,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: COLORS.grey,
+    backgroundColor: colors.grey,
   },
   footerRow: {
     flexDirection: 'row',
@@ -567,11 +551,11 @@ const styles = StyleSheet.create({
     borderRadius: LAYOUT.buttonRadius,
     backgroundColor: 'rgba(102, 210, 177, 0.1)',
     borderWidth: 1,
-    borderColor: COLORS.teal,
+    borderColor: colors.teal,
     minHeight: 56,
   },
   backNavText: {
-    color: COLORS.teal,
+    color: colors.teal,
     fontSize: 16,
     fontFamily: FONTS.en.semibold,
   },
@@ -596,13 +580,13 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   camOverlayTitle: {
-    color: COLORS.white,
+    color: colors.white,
     fontSize: 16,
     fontFamily: FONTS.en.bold,
     marginTop: 4,
   },
   camOverlaySub: {
-    color: COLORS.grey,
+    color: colors.grey,
     fontSize: 12,
     fontFamily: FONTS.en.regular,
     textAlign: 'center',
@@ -616,13 +600,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 8,
     borderWidth: 1,
-    borderColor: COLORS.teal,
+    borderColor: colors.teal,
   },
   simBannerText: {
-    color: COLORS.tealBright,
+    color: colors.tealBright,
     fontSize: 11,
     lineHeight: 15,
     fontFamily: FONTS.en.regular,
     textAlign: 'center',
   },
 });
+}

@@ -438,11 +438,11 @@ export default function SettingsScreen({ navigation }) {
             style={({ pressed }) => [styles.navRow, pressed && styles.pressed]}
             onPress={() => navigation.navigate('AILab')}
           >
-            <MaterialCommunityIcons name="flask-outline" size={22} color={COLORS.teal} />
+            <MaterialCommunityIcons name="flask-outline" size={22} color={colors.teal} />
             <Text style={styles.navRowText}>AI Lab — test models & server URL</Text>
-            <MaterialCommunityIcons name="chevron-right" size={22} color={COLORS.grey} />
+            <MaterialCommunityIcons name="chevron-right" size={22} color={colors.grey} />
           </Pressable>
-          <InsetDivider />
+          <InsetDivider styles={styles} />
           <Pressable
             style={({ pressed }) => [styles.navRow, styles.navRowLast, pressed && styles.pressed]}
             onPress={() => navigation.navigate('Permissions')}

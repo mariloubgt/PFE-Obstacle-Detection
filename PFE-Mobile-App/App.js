@@ -5,6 +5,8 @@ import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useAppFonts } from './constants/typography';
+import { ThemeProvider, useAppTheme } from './contexts/ThemeContext';
+import { initSpeechAudio } from './utils/speakAlert';
 import WelcomeScreen from './screens/WelcomeScreen';
 import PermissionsScreen from './screens/PermissionsScreen';
 import LanguageVoiceScreen from './screens/LanguageVoiceScreen';
@@ -17,12 +19,38 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const Stack = createNativeStackNavigator();
 
+function AppNavigation() {
+  const { colors } = useAppTheme();
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator
+        initialRouteName="Welcome"
+        screenOptions={{
+          headerShown: false,
+          animation: 'slide_from_right',
+          contentStyle: { backgroundColor: colors.bg },
+        }}
+      >
+        <Stack.Screen name="Welcome" component={WelcomeScreen} />
+        <Stack.Screen name="Permissions" component={PermissionsScreen} />
+        <Stack.Screen name="LanguageVoice" component={LanguageVoiceScreen} />
+        <Stack.Screen name="Main" component={MainNavigationScreen} />
+        <Stack.Screen name="SceneQuery" component={SceneQueryScreen} />
+        <Stack.Screen name="Settings" component={SettingsScreen} />
+        <Stack.Screen name="AILab" component={AILabScreen} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+
 export default function App() {
   const [fontsLoaded, fontError] = useAppFonts();
 
   useEffect(() => {
     if (fontsLoaded || fontError) {
       SplashScreen.hideAsync().catch(() => {});
+      initSpeechAudio();
     }
   }, [fontsLoaded, fontError]);
 
@@ -32,24 +60,9 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <Stack.Navigator
-          initialRouteName="Welcome"
-          screenOptions={{
-            headerShown: false,
-            animation: 'slide_from_right',
-            contentStyle: { backgroundColor: '#0D1117' },
-          }}
-        >
-          <Stack.Screen name="Welcome" component={WelcomeScreen} />
-          <Stack.Screen name="Permissions" component={PermissionsScreen} />
-          <Stack.Screen name="LanguageVoice" component={LanguageVoiceScreen} />
-          <Stack.Screen name="Main" component={MainNavigationScreen} />
-          <Stack.Screen name="SceneQuery" component={SceneQueryScreen} />
-          <Stack.Screen name="Settings" component={SettingsScreen} />
-          <Stack.Screen name="AILab" component={AILabScreen} />
-        </Stack.Navigator>
-      </NavigationContainer>
+      <ThemeProvider>
+        <AppNavigation />
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
