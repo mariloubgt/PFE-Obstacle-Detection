@@ -45,13 +45,15 @@ export default function WelcomeScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        <Image
-          source={require('../assets/branding/logo.png')}
-          style={styles.logoImage}
-          resizeMode="contain"
-          accessibilityRole="image"
-          accessibilityLabel="VisionAid — assistive navigation app logo"
-        />
+        <View style={styles.logoFrame}>
+          <Image
+            source={require('../assets/branding/logo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+            accessibilityRole="image"
+            accessibilityLabel="VisionAid — assistive navigation app logo"
+          />
+        </View>
 
         <Text style={styles.appName} accessibilityRole="header">
           VisionAid
@@ -118,18 +120,18 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 28,
   },
-  logoImage: {
+  logoFrame: {
     alignSelf: 'center',
+    width: 112,
+    height: 112,
+    marginTop: 8,
+    marginBottom: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoImage: {
     width: '100%',
-    maxWidth: LAYOUT.logoBoxMaxWidth,
-    height: LAYOUT.logoBoxHeight,
-    marginBottom: 16,
-    borderRadius: LAYOUT.cardRadius,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 8,
+    height: '100%',
   },
   appName: {
     textAlign: 'center',

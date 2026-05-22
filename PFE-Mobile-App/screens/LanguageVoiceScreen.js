@@ -10,7 +10,9 @@ import { COLORS, LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
+import * as Speech from 'expo-speech';
 import { loadSpeechRate, saveSpeechRate } from '../utils/appSettings';
+import { buildTtsOptions } from '../utils/buildTtsOptions';
 
 export default function LanguageVoiceScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -111,6 +113,22 @@ export default function LanguageVoiceScreen({ navigation }) {
         </View>
       </View>
 
+      <Pressable
+        style={({ pressed }) => [styles.testVoiceBtn, pressed && styles.pressed]}
+        onPress={() => {
+          Speech.stop();
+          Speech.speak(
+            'This is how navigation alerts will sound at your current settings.',
+            buildTtsOptions(volume, speechRate)
+          );
+        }}
+        accessibilityRole="button"
+        accessibilityLabel="Test voice settings"
+      >
+        <MaterialCommunityIcons name="volume-high" size={20} color={COLORS.teal} />
+        <Text style={styles.testVoiceText}>Test voice</Text>
+      </Pressable>
+
       <View style={{ flex: 1 }} />
 
       <Pressable
@@ -178,6 +196,22 @@ const styles = StyleSheet.create({
     color: COLORS.grey,
     fontSize: 12,
     fontFamily: FONTS.en.regular,
+  },
+  testVoiceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: LAYOUT.buttonRadius,
+    borderWidth: 1,
+    borderColor: COLORS.teal,
+    marginBottom: 16,
+  },
+  testVoiceText: {
+    color: COLORS.teal,
+    fontSize: 15,
+    fontFamily: FONTS.en.semibold,
   },
   primaryBtn: {
     flexDirection: 'row',

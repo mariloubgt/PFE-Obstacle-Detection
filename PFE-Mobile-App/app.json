@@ -14,15 +14,18 @@
       "backgroundColor": "#0D1117"
     },
     "ios": {
+
       "supportsTablet": true,
-      "deploymentTarget": "15.1",
+      "deploymentTarget": "18.0",
       "bundleIdentifier": "com.anonymous.pfemobileapp",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Allow the microphone for optional hands-free commands (e.g. describe environment).",
+        "NSMicrophoneUsageDescription": "Microphone access lets the app detect the phrase describe environment.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "NSSpeechRecognitionUsageDescription": "Allow speech recognition to detect hands-free commands on the navigation screen."
+        "NSSpeechRecognitionUsageDescription": "Speech recognition enables hands-free scene description commands.",
+        "NSMotionUsageDescription": "Motion is used to detect a shake so we can repeat the close-obstacle warning.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -33,8 +36,6 @@
       "edgeToEdgeEnabled": true,
       "usesCleartextTraffic": true,
       "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ],
@@ -64,6 +65,11 @@
           "speechRecognitionPermission": "Speech recognition enables hands-free scene description commands."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "48a6178d-8dba-400b-ac5b-b0622b3cb1cc"
+      }
+    }
   }
 }

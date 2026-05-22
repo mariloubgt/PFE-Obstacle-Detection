@@ -28,9 +28,12 @@ import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
-import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
+import { buildTtsOptions } from '../utils/buildTtsOptions';
 import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
+import { pickCloseThreat } from '../utils/evaluateCloseThreat';
+import { isSimulatorDevice } from '../utils/isSimulator';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
+import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { useDescribeEnvironmentHotword } from '../hooks/useDescribeEnvironmentHotword';
 import { triggerSceneDescribe } from './SceneQueryScreen';
@@ -105,7 +108,6 @@ function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.45) {
   return lockedDet;
 }
 
-const FRAME_MS = 1500;
 const SPEAK_MIN_GAP_MS = 4000;
 const NAV_GROQ_INTERVAL_MS = 4000;
 /** Speak scene/caption again when text changes, at most every this many ms */
@@ -160,6 +162,8 @@ export default function MainNavigationScreen({ navigation }) {
     DEFAULTS.volumeHardwareAction
   );
   const [handsFreeDescribe, setHandsFreeDescribe] = useState(DEFAULTS.handsFreeDescribe);
+  const [camMountError, setCamMountError] = useState(null);
+  const isSimulator = isSimulatorDevice();
 
   useEffect(() => {
     const get =
@@ -187,19 +191,25 @@ export default function MainNavigationScreen({ navigation }) {
   const primaryLockRef = useRef(null);
   const manualSuppressRef = useRef(false);
   const alertVolumeRef = useRef(alertVolume);
+  const [aiFrameMs, setAiFrameMs] = useState(DEFAULTS.aiFrameMs);
+  const prefsRef = useRef({ ...DEFAULTS });
   const predictOptsRef = useRef({
     hfovDeg: 56,
     depthScale: 1,
     useGemini: false,
   });
 
+  const ttsOpts = useCallback(
+    () => buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate),
+    []
+  );
+
   const refreshPredictOpts = useCallback(() => {
-    void loadAppPreferences().then((p) => {
-      predictOptsRef.current = {
-        hfovDeg: p.cameraHfovDeg,
-        depthScale: p.depthScale,
-        useGemini: p.internetGemini,
-      };
+    void loadAppPreferences().then(async (p) => {
+      prefsRef.current = p;
+      const po = await getPredictOptionsForRequest(p);
+      predictOptsRef.current = po;
+      setAiFrameMs(p.aiFrameMs);
       setVolumeHardwareAction(p.volumeHardwareAction);
       setHandsFreeDescribe(p.handsFreeDescribe);
     });
@@ -250,24 +260,16 @@ export default function MainNavigationScreen({ navigation }) {
     if (aiTestRef.current) return;
     setAiTestEnabled(true);
     Speech.stop();
-    Speech.speak('Navigation activated.', {
-      language: 'en-US',
-      rate: 0.92,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
-  }, []);
+    Speech.speak('Navigation activated.', ttsOpts());
+  }, [ttsOpts]);
 
   /** Voice command "stop navigation" → disable AI test. */
   const onStopNavigation = useCallback(() => {
     if (!aiTestRef.current) return;
     setAiTestEnabled(false);
     Speech.stop();
-    Speech.speak('Navigation stopped.', {
-      language: 'en-US',
-      rate: 0.92,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
-  }, []);
+    Speech.speak('Navigation stopped.', ttsOpts());
+  }, [ttsOpts]);
 
   /** Sound / volume key / hotword → open Scene Query then call describe directly.
    *  Uses a module-level callback so it works whether the screen is new or already focused. */
@@ -288,6 +290,7 @@ export default function MainNavigationScreen({ navigation }) {
     enabled: handsFreeDescribe && !volumeOpen,
     cameraRef,
     alertVolumeRef,
+    getTtsOpts: ttsOpts,
     onPhraseMatched: openSceneQueryWithDescribe,
     onActivateNavigation,
     onStopNavigation,
@@ -305,11 +308,7 @@ export default function MainNavigationScreen({ navigation }) {
       handsFreeDescribe
         ? 'Hands-free phrase listening enabled.'
         : 'Hands-free phrase listening disabled.',
-      {
-        language: 'en-US',
-        rate: 0.92,
-        ...ttsVolumeOptions(alertVolumeRef.current),
-      }
+      ttsOpts()
     );
   }, [handsFreeDescribe]);
 
@@ -347,13 +346,8 @@ export default function MainNavigationScreen({ navigation }) {
     lastTtsKeyRef.current = obKey;
     lastSpeakAtRef.current = now;
     Speech.stop();
-    Speech.speak(msg, {
-      language: 'en-US',
-      rate: 0.9,
-      pitch: 1.0,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
-  }, []);
+    Speech.speak(msg, ttsOpts());
+  }, [ttsOpts]);
 
   const onCameraTap = useCallback(() => {
     if (Platform.OS !== 'web') {
@@ -375,12 +369,13 @@ export default function MainNavigationScreen({ navigation }) {
     }
   }, []);
 
-  /** Emergency stop rule: any close obstacle <1.5m → speak immediately (with 4s cooldown). */
+  /** Emergency stop rule: obstacle within danger threshold → speak (6s cooldown). */
   const speakEmergencyIfNeeded = useCallback((primaryOnly) => {
     if (!aiTestRef.current) return false;
+    const threshold = prefsRef.current.dangerThresholdM ?? DEFAULTS.dangerThresholdM;
     const closest = primaryOnly[0];
     if (!closest || typeof closest.distance_m !== 'number') return false;
-    if (closest.distance_m >= 1.5) return false;
+    if (closest.distance_m >= threshold) return false;
     const now = Date.now();
     if (now - lastEmergencyAtRef.current < 6000) return false;
     lastEmergencyAtRef.current = now;
@@ -391,14 +386,9 @@ export default function MainNavigationScreen({ navigation }) {
     const side = cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
     const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
     Speech.stop();
-    Speech.speak(msg, {
-      language: 'en-US',
-      rate: 0.95,
-      pitch: 1.05,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
+    Speech.speak(msg, { ...ttsOpts(), pitch: 1.05 });
     return true;
-  }, []);
+  }, [ttsOpts]);
 
   /** Fire Groq navigate call on its own timer, independent of YOLO loop. */
   const fireGroqNav = useCallback(async () => {
@@ -411,7 +401,7 @@ export default function MainNavigationScreen({ navigation }) {
       if (!api) return;
       // Take a fresh photo for Groq
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.3,
+        quality: prefsRef.current.lowLight ? 0.38 : 0.3,
         skipProcessing: true,
       });
       if (!aiTestRef.current) return;
@@ -419,7 +409,7 @@ export default function MainNavigationScreen({ navigation }) {
       const data = await predictImage(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-        useGemini: false,
+        useGemini: po.useGemini,
         useGroq: true,
         groqMode: 'navigate',
       });
@@ -435,11 +425,7 @@ export default function MainNavigationScreen({ navigation }) {
       lastNavTextRef.current = guidance;
       lastNavSpokenAtRef.current = now;
       Speech.stop();
-      Speech.speak(guidance, {
-        language: 'en-US',
-        rate: 0.92,
-        ...ttsVolumeOptions(alertVolumeRef.current),
-      });
+      Speech.speak(guidance, ttsOpts());
     } catch {
       // ignore — nav is best-effort
     } finally {
@@ -459,15 +445,16 @@ export default function MainNavigationScreen({ navigation }) {
     try {
       const api = await loadInferenceApiUrl();
       if (!api) return;
+      const prefs = prefsRef.current;
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.22,
+        quality: prefs.lowLight ? 0.38 : 0.22,
         skipProcessing: true,
       });
       const po = predictOptsRef.current;
       const data = await predictImage(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-        useGemini: false,
+        useGemini: po.useGemini,
         useGroq: false,
       });
 
@@ -492,6 +479,29 @@ export default function MainNavigationScreen({ navigation }) {
       setVoiceContextHint(ctx);
       setInferenceError(null);
 
+      const threshold = prefs.dangerThresholdM ?? DEFAULTS.dangerThresholdM;
+      if (!manualSuppressRef.current) {
+        const threat = pickCloseThreat(smoothed, { dangerWithinMeters: threshold });
+        if (threat) {
+          setDangerPayload(threat);
+          if (prefs.vibrationDanger && Platform.OS !== 'web') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
+              () => {}
+            );
+          }
+        } else {
+          setDangerPayload(null);
+        }
+      } else {
+        const safe =
+          primaryOnly.length === 0 ||
+          (primaryOnly[0].distance_m ?? 99) > threshold + 0.35;
+        if (safe) {
+          manualSuppressRef.current = false;
+          setDangerPayload(null);
+        }
+      }
+
       speakEmergencyIfNeeded(primaryOnly);
     } catch (e) {
       if (aiTestRef.current) setInferenceError(e.message);
@@ -515,7 +525,7 @@ export default function MainNavigationScreen({ navigation }) {
       lastEmergencyAtRef.current = 0;
       // YOLO loop: fast, no Groq
       runFrame();
-      yoloInterval = setInterval(runFrame, FRAME_MS);
+      yoloInterval = setInterval(runFrame, aiFrameMs);
       // Groq nav loop: separate, slower timer
       setTimeout(() => { void fireGroqNav(); }, 1500); // first call after 1.5s
       groqInterval = setInterval(() => { void fireGroqNav(); }, NAV_GROQ_INTERVAL_MS);
@@ -527,12 +537,14 @@ export default function MainNavigationScreen({ navigation }) {
       setInferenceMs(null);
       setVoiceContextHint(null);
       setInferenceError(null);
+      setDangerPayload(null);
+      manualSuppressRef.current = false;
     }
     return () => {
       if (yoloInterval) clearInterval(yoloInterval);
       if (groqInterval) clearInterval(groqInterval);
     };
-  }, [aiTestEnabled, runFrame, fireGroqNav]);
+  }, [aiTestEnabled, aiFrameMs, runFrame, fireGroqNav]);
 
   const onDangerBack = useCallback(() => {
     setDangerPayload(null);
@@ -587,11 +599,7 @@ export default function MainNavigationScreen({ navigation }) {
               const next = !aiTestEnabled;
               setAiTestEnabled(next);
               Speech.stop();
-              Speech.speak(next ? 'Navigation activated.' : 'Navigation stopped.', {
-                language: 'en-US',
-                rate: 0.92,
-                ...ttsVolumeOptions(alertVolumeRef.current),
-              });
+              Speech.speak(next ? 'Navigation activated.' : 'Navigation stopped.', ttsOpts());
             }}
             accessibilityRole="button"
             accessibilityState={{ selected: aiTestEnabled }}
@@ -631,17 +639,36 @@ export default function MainNavigationScreen({ navigation }) {
       {/* VISION AREA — flip / torch restored for front camera */}
       <View style={styles.visionArea}>
         <Pressable style={styles.cameraTouchable} onPress={onCameraTap}>
-          <CameraComponent
-            ref={cameraRef}
-            style={StyleSheet.absoluteFill}
-            type={facing}
-            flashMode={
-              facing === CAMERA_TYPE.back && torch
-                ? FLASH_MODE.torch
-                : FLASH_MODE.off
-            }
-            mode="picture"
-          />
+          {isFocused ? (
+            <CameraComponent
+              ref={cameraRef}
+              style={StyleSheet.absoluteFill}
+              type={facing}
+              ratio="16:9"
+              flashMode={
+                facing === CAMERA_TYPE.back && torch
+                  ? FLASH_MODE.torch
+                  : FLASH_MODE.off
+              }
+              onMountError={(e) =>
+                setCamMountError(e?.message || 'Camera failed to start')
+              }
+            />
+          ) : (
+            <View style={[StyleSheet.absoluteFill, styles.cameraPaused]} />
+          )}
+          {isFocused && isSimulator ? (
+            <View style={styles.simBanner} pointerEvents="none">
+              <Text style={styles.simBannerText}>
+                Simulator: Features → Camera → pick a source (not None)
+              </Text>
+            </View>
+          ) : null}
+          {camMountError ? (
+            <View style={styles.simBanner}>
+              <Text style={styles.simBannerText}>{camMountError}</Text>
+            </View>
+          ) : null}
           <DetectionOverlay detections={detections} />
           {tapFlash ? <View style={styles.tapFlash} pointerEvents="none" /> : null}
         </Pressable>
@@ -707,6 +734,12 @@ export default function MainNavigationScreen({ navigation }) {
                       Estimated distance (closest){' '}
                       <Text style={styles.sceneDistanceEm}>{formatMeters(detections[0].distance_m)}</Text>
                     </Text>
+                  ) : null}
+                  {voiceContextHint ? (
+                    <>
+                      <Text style={styles.cardSectionLabel}>Scene context</Text>
+                      <Text style={styles.voiceContextHint}>{voiceContextHint}</Text>
+                    </>
                   ) : null}
                   <Text style={styles.cardSectionLabel}>Pipeline</Text>
                   <Text style={styles.inferenceMeta}>
@@ -804,7 +837,13 @@ export default function MainNavigationScreen({ navigation }) {
         </Pressable>
       </Modal>
 
-      <DangerAlertModal visible={!!dangerPayload} onBack={onDangerBack} />
+      <DangerAlertModal
+        visible={!!dangerPayload}
+        displayLabel={dangerPayload?.displayLabel}
+        distanceM={dangerPayload?.distanceM}
+        alertMessage={dangerPayload?.alertMessage}
+        onBack={onDangerBack}
+      />
     </View>
   );
 }
@@ -824,6 +863,26 @@ const styles = StyleSheet.create({
   aiPillPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
   visionArea: { flex: 1, marginHorizontal: 15, marginVertical: 10, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111' },
   cameraTouchable: { flex: 1 },
+  cameraPaused: { backgroundColor: '#111' },
+  simBanner: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 12,
+    backgroundColor: 'rgba(15,23,42,0.9)',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(20,184,166,0.5)',
+    zIndex: 25,
+  },
+  simBannerText: {
+    color: COLORS.tealBright,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+    fontFamily: FONTS.en.regular,
+  },
   tapFlash: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(255,255,255,0.22)',

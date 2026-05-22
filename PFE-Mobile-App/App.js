@@ -11,6 +11,7 @@ import LanguageVoiceScreen from './screens/LanguageVoiceScreen';
 import MainNavigationScreen from './screens/MainNavigationScreen';
 import SceneQueryScreen from './screens/SceneQueryScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import AILabScreen from './screens/AILabScreen';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -46,6 +47,7 @@ export default function App() {
           <Stack.Screen name="Main" component={MainNavigationScreen} />
           <Stack.Screen name="SceneQuery" component={SceneQueryScreen} />
           <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="AILab" component={AILabScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>

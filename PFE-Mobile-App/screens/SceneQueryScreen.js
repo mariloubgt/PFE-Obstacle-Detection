@@ -12,9 +12,12 @@ import { FONTS } from '../constants/typography';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { predictImage } from '../services/predict';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
+import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
 import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
-import { ttsVolumeOptions } from '../utils/ttsVolumeOptions';
+import { buildTtsOptions } from '../utils/buildTtsOptions';
+import { describeFromDetections } from '../utils/describeFromDetections';
+import { isSimulatorDevice } from '../utils/isSimulator';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back' };
@@ -48,15 +51,17 @@ export default function SceneQueryScreen({ navigation }) {
     { id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() },
   ]);
   const [isTyping, setIsTyping] = useState(false);
+  const [camError, setCamError] = useState(null);
   const alertVolumeRef = useRef(0.8);
+  const isSimulator = isSimulatorDevice();
+  const prefsRef = useRef(DEFAULTS);
 
   const speakReply = useCallback((text) => {
     Speech.stop();
-    Speech.speak(text, {
-      language: 'en-US',
-      rate: 0.92,
-      ...ttsVolumeOptions(alertVolumeRef.current),
-    });
+    Speech.speak(
+      text,
+      buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate)
+    );
   }, []);
 
   useEffect(() => {
@@ -106,11 +111,10 @@ export default function SceneQueryScreen({ navigation }) {
 
     try {
       if (stale()) return;
-      Speech.speak('Describing.', {
-        language: 'en-US',
-        rate: 0.92,
-        ...ttsVolumeOptions(alertVolumeRef.current),
-      });
+      Speech.speak(
+        'Describing.',
+        buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate)
+      );
 
       let granted = camPermission?.granted === true;
       if (!granted) {
@@ -168,16 +172,11 @@ export default function SceneQueryScreen({ navigation }) {
 
       const prefs = await loadAppPreferences();
       if (stale()) return;
+      const predictOpts = await getPredictOptionsForRequest(prefs);
+      prefsRef.current = prefs;
       let data;
       try {
-        data = await predictImage(api, photo.uri, {
-          hfovDeg: prefs.cameraHfovDeg,
-          depthScale: prefs.depthScale,
-          useGemini: false,
-          useGroq: true,
-          groqMode: 'describe',
-          detailed: true,
-        });
+        data = await predictImage(api, photo.uri, predictOpts);
       } catch (netErr) {
         if (stale()) return;
         const msg =
@@ -200,11 +199,23 @@ export default function SceneQueryScreen({ navigation }) {
         typeof data?.scene?.top5?.[0]?.label === 'string'
           ? data.scene.top5[0].label.trim()
           : '';
+      const geminiLine =
+        typeof data?.gemini?.darija === 'string' && data.gemini.darija.trim()
+          ? data.gemini.darija.trim()
+          : typeof data?.gemini?.focus === 'string' && data.gemini.focus.trim()
+            ? data.gemini.focus.trim()
+            : '';
+      const detFallback = describeFromDetections(data?.detections);
       const groqCombined = [groqScene, groqGuidance].filter(Boolean).join(' ').trim();
       const toSpeak =
         groqCombined ||
+        geminiLine ||
         sceneFallback ||
-        (groqErr ? `Could not describe the scene. ${groqErr}` : 'No description available.');
+        (groqErr && String(groqErr).includes('GROQ_API_KEY')
+          ? `${detFallback} Set GROQ_API_KEY on your PC and restart the inference server.`
+          : groqErr
+            ? `Could not describe the scene. ${groqErr}`
+            : detFallback);
 
       appendMessage({ id: nextId(), role: 'assistant', text: toSpeak });
       speakReply(toSpeak);
@@ -244,6 +255,7 @@ export default function SceneQueryScreen({ navigation }) {
         alertVolumeRef.current = v;
       });
       void loadAppPreferences().then((p) => {
+        prefsRef.current = p;
         setVolumeHardwareAction(p.volumeHardwareAction);
       });
     }, [refreshCamPermission])
@@ -295,12 +307,17 @@ export default function SceneQueryScreen({ navigation }) {
       </View>
 
       <View style={styles.cameraContainer}>
-        <CameraComponent
-          ref={cameraRef}
-          style={styles.cameraPreview}
-          type={CAMERA_TYPE.back}
-          mode="picture"
-        />
+        {camPermission?.granted ? (
+          <CameraComponent
+            ref={cameraRef}
+            style={styles.cameraPreview}
+            type={CAMERA_TYPE.back}
+            ratio="16:9"
+            onMountError={(e) => setCamError(e?.message || 'Camera failed to start')}
+          />
+        ) : (
+          <View style={styles.cameraPreview} />
+        )}
         {camPermission && !camPermission.granted ? (
           <Pressable
             style={styles.camOverlay}
@@ -312,6 +329,18 @@ export default function SceneQueryScreen({ navigation }) {
             <Text style={styles.camOverlayTitle}>Allow camera</Text>
             <Text style={styles.camOverlaySub}>Needed to grab a photo for describing</Text>
           </Pressable>
+        ) : null}
+        {camPermission?.granted && isSimulator ? (
+          <View style={styles.simBanner} pointerEvents="none">
+            <Text style={styles.simBannerText}>
+              Simulator: menu bar → Features → Camera → choose a source (not None)
+            </Text>
+          </View>
+        ) : null}
+        {camError ? (
+          <View style={styles.simBanner}>
+            <Text style={styles.simBannerText}>{camError}</Text>
+          </View>
         ) : null}
       </View>
 
@@ -575,6 +604,24 @@ const styles = StyleSheet.create({
   camOverlaySub: {
     color: COLORS.grey,
     fontSize: 12,
+    fontFamily: FONTS.en.regular,
+    textAlign: 'center',
+  },
+  simBanner: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 8,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: COLORS.teal,
+  },
+  simBannerText: {
+    color: COLORS.tealBright,
+    fontSize: 11,
+    lineHeight: 15,
     fontFamily: FONTS.en.regular,
     textAlign: 'center',
   },
