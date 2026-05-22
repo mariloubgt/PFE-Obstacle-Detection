@@ -11,15 +11,22 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(_PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+
 from pfe.phase3 import config
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import Body, FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps
 from ultralytics import YOLO
@@ -28,6 +35,7 @@ import uvicorn
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
 from api.llava_navigation import run_llava_navigation_if_enabled
 from api.groq_navigation import run_groq_navigation, status as groq_status
+from api import runtime_lab
 
 
 def _resolve_weights(raw: str) -> Path:
@@ -49,7 +57,7 @@ HFOV_DEG = float(os.environ.get("CAMERA_HORIZONTAL_FOV_DEG", "56.0"))
 DEPTH_SCALE_ENV = float(os.environ.get("DEPTH_SCALE", "1.0"))
 
 
-def _parse_opt_float(value: str | None, default: float, lo: float, hi: float) -> float:
+def _parse_opt_float(value: Optional[str], default: float, lo: float, hi: float) -> float:
     if value is None or str(value).strip() == "":
         x = default
     else:
@@ -76,7 +84,6 @@ def _box_iou(a: dict[str, Any], b: dict[str, Any]) -> float:
 
 
 def _merge_detections(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep union of both models; drop duplicate boxes (same class + high IoU), keep higher confidence."""
     ranked = sorted(
         items,
         key=lambda d: (-float(d.get("confidence", 0)), float(d.get("distance_m") or 99)),
@@ -88,6 +95,20 @@ def _merge_detections(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         kept.append(d)
     kept.sort(key=lambda d: float(d.get("distance_m") or 99))
     return kept
+
+
+def _detect_lan_ip() -> Optional[str]:
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
 
 
 app = FastAPI(title="VisionAid YOLO Inference", version="1.0.0")
@@ -140,11 +161,13 @@ def _extract_detections(result, img_w: int, img_h: int, req_hfov: float, req_sca
 
 def _predict_one(yolo_model: YOLO, img: Image.Image, source: str, req_hfov: float, req_scale: float) -> tuple[list[dict[str, Any]], float]:
     t0 = time.perf_counter()
+    yolo_conf = runtime_lab.get_yolo_conf(CONF)
+    yolo_imgsz = runtime_lab.get_yolo_imgsz(YOLO_IMGSZ)
     result = yolo_model.predict(
         img,
-        conf=CONF,
+        conf=yolo_conf,
         iou=YOLO_IOU,
-        imgsz=YOLO_IMGSZ,
+        imgsz=yolo_imgsz,
         max_det=YOLO_MAX_DET,
         verbose=False,
     )[0]
@@ -162,8 +185,7 @@ def _run_dual_yolo(img: Image.Image, req_hfov: float, req_scale: float) -> tuple
     if not jobs:
         return [], 0.0
     if len(jobs) == 1:
-        dets, ms = _predict_one(jobs[0][0], img, jobs[0][1], req_hfov, req_scale)
-        return dets, ms
+        return _predict_one(jobs[0][0], img, jobs[0][1], req_hfov, req_scale)
 
     futures = [
         _yolo_pool.submit(_predict_one, m, img, src, req_hfov, req_scale)
@@ -178,26 +200,31 @@ def _run_dual_yolo(img: Image.Image, req_hfov: float, req_scale: float) -> tuple
     return _merge_detections(combined), total_ms
 
 
-@app.on_event("startup")
-def load_model():
-    global model_outdoor, model_indoor, _gemini_status
+def _load_yolo_models(outdoor_path: Path, indoor_path: Path) -> list[str]:
+    global model_outdoor, model_indoor
     loaded: list[str] = []
-    if OUTDOOR_PATH.is_file():
-        print(f"Loading outdoor YOLO: {OUTDOOR_PATH}")
-        model_outdoor = YOLO(str(OUTDOOR_PATH))
+    if outdoor_path.is_file():
+        print(f"Loading outdoor YOLO: {outdoor_path}")
+        model_outdoor = YOLO(str(outdoor_path))
         loaded.append("outdoor")
     else:
-        print(f"[WARN] Outdoor weights missing: {OUTDOOR_PATH}")
+        print(f"[WARN] Outdoor weights missing: {outdoor_path}")
         model_outdoor = None
 
-    if INDOOR_PATH.is_file():
-        print(f"Loading indoor YOLO: {INDOOR_PATH}")
-        model_indoor = YOLO(str(INDOOR_PATH))
+    if indoor_path.is_file():
+        print(f"Loading indoor YOLO: {indoor_path}")
+        model_indoor = YOLO(str(indoor_path))
         loaded.append("indoor")
     else:
-        print(f"[WARN] Indoor weights missing: {INDOOR_PATH}")
+        print(f"[WARN] Indoor weights missing: {indoor_path}")
         model_indoor = None
+    return loaded
 
+
+@app.on_event("startup")
+def load_model():
+    global _gemini_status
+    loaded = _load_yolo_models(OUTDOOR_PATH, INDOOR_PATH)
     if not loaded:
         raise FileNotFoundError(
             f"No YOLO weights found. Expected {OUTDOOR_PATH} and/or {INDOOR_PATH}"
@@ -236,19 +263,77 @@ def root() -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    lan = _detect_lan_ip()
+    gst = groq_status()
+    snap = runtime_lab.get_snapshot(
+        model_path=str(OUTDOOR_PATH),
+        default_conf=CONF,
+        default_imgsz=YOLO_IMGSZ,
+        default_groq_model=gst.get("model") or "meta-llama/llama-4-scout-17b-16e-instruct",
+        port=PORT,
+        lan_ip=lan,
+    )
     return {
         "ok": model_outdoor is not None or model_indoor is not None,
         "model_path": str(OUTDOOR_PATH),
         "model_path_indoor": str(INDOOR_PATH),
         "outdoor_loaded": model_outdoor is not None,
         "indoor_loaded": model_indoor is not None,
-        "yolo_conf": CONF,
-        "yolo_imgsz": YOLO_IMGSZ,
+        "yolo_conf": snap["effective"]["yolo_conf"],
+        "yolo_imgsz": snap["effective"]["yolo_imgsz"],
         "horizontal_fov_deg": HFOV_DEG,
         "depth_scale_default": DEPTH_SCALE_ENV,
         "engine": "PFE-Phase3-Dual-YOLO",
         "gemini": _gemini_status,
-        "groq": groq_status(),
+        "groq": gst,
+        "lab": snap,
+        "urls": snap.get("urls"),
+    }
+
+
+@app.get("/lab/config")
+def lab_config_get() -> dict[str, Any]:
+    lan = _detect_lan_ip()
+    gst = groq_status()
+    snap = runtime_lab.get_snapshot(
+        model_path=str(OUTDOOR_PATH),
+        default_conf=CONF,
+        default_imgsz=YOLO_IMGSZ,
+        default_groq_model=gst.get("model") or "meta-llama/llama-4-scout-17b-16e-instruct",
+        port=PORT,
+        lan_ip=lan,
+    )
+    snap["model_path_indoor"] = str(INDOOR_PATH)
+    return snap
+
+
+@app.put("/lab/config")
+def lab_config_put(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    applied = runtime_lab.apply_patch(body if isinstance(body, dict) else {})
+    return {"applied": applied, "lab": lab_config_get()}
+
+
+@app.post("/lab/reset")
+def lab_config_reset() -> dict[str, Any]:
+    runtime_lab.reset()
+    return lab_config_get()
+
+
+@app.post("/lab/reload-yolo")
+def lab_reload_yolo(body: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Reload outdoor YOLO (optional path). Indoor weights path stays from config."""
+    payload = body or {}
+    outdoor = OUTDOOR_PATH
+    weights = (payload.get("yolo_weights") or "").strip()
+    if weights:
+        outdoor = _resolve_weights(weights)
+        runtime_lab.apply_patch({"yolo_weights": str(outdoor)})
+    loaded = _load_yolo_models(outdoor, INDOOR_PATH)
+    return {
+        "ok": bool(loaded),
+        "loaded": loaded,
+        "model_path": str(outdoor),
+        "model_path_indoor": str(INDOOR_PATH),
     }
 
 
@@ -259,8 +344,8 @@ async def predict(
     use_groq: str = Form("true"),
     groq_mode: str = Form("describe"),
     detailed: str = Form("false"),
-    hfov_deg: str | None = Form(None),
-    depth_scale: str | None = Form(None),
+    hfov_deg: Optional[str] = Form(None),
+    depth_scale: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     content = await file.read()
@@ -275,7 +360,9 @@ async def predict(
 
     detections, yolo_ms = _run_dual_yolo(img, req_hfov, req_scale)
 
-    if str(use_groq).strip().lower() in ("1", "true", "yes", "on"):
+    groq_on = str(use_groq).strip().lower() in ("1", "true", "yes", "on")
+    groq_on = groq_on and runtime_lab.get_enable_groq(True)
+    if groq_on:
         groq_result = run_groq_navigation(img, detections, mode=groq_mode)
     else:
         groq_result = {
@@ -294,6 +381,16 @@ async def predict(
         scene_list = [{"label": groq_result["scene"], "probability": 1.0}]
     elif os.environ.get("ENABLE_SCENE", "0").strip().lower() in ("1", "true", "yes", "on"):
         scene_list = scene_top5_cached(img)
+    elif groq_result.get("error") and detections:
+        parts = []
+        for d in detections[:6]:
+            name = str(d.get("name", "object")).replace("_", " ")
+            dist = d.get("distance_m")
+            if isinstance(dist, (int, float)):
+                parts.append(f"{name} at {dist} m")
+            else:
+                parts.append(name)
+        scene_list = [{"label": "Visible: " + ", ".join(parts) + ".", "probability": 1.0}]
 
     if str(use_gemini).strip().lower() not in ("1", "true", "yes", "on"):
         gem = {
@@ -303,7 +400,9 @@ async def predict(
             "focus": None,
             "error": "Skipped (client use_gemini=false).",
         }
-    elif os.environ.get("ENABLE_GEMINI", "0").strip().lower() not in ("1", "true", "yes", "on"):
+    elif not runtime_lab.get_enable_gemini(
+        os.environ.get("ENABLE_GEMINI", "0").strip().lower() in ("1", "true", "yes", "on")
+    ):
         gem = {
             "text": None,
             "darija": None,
@@ -346,7 +445,7 @@ async def predict(
 async def voice_query(
     image: UploadFile = File(...),
     audio: UploadFile = File(...),
-    hfov_deg: str | None = Form(None),
+    hfov_deg: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
 

@@ -18,14 +18,11 @@ import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { useThemeColors } from '../contexts/ThemeContext';
 import { loadInternetGemini, saveInternetGemini } from '../utils/appSettings';
-
-function tryLoadSpeechRecognition() {
-  try {
-    return require('expo-speech-recognition');
-  } catch {
-    return null;
-  }
-}
+import {
+  ensureSpeechRecognitionPermissions,
+  getSpeechRecognitionModule,
+  isSpeechPermissionGranted,
+} from '../utils/speechRecognitionPermissions';
 
 function PermissionRow({ styles, colors, icon, title, description, value, onValueChange, busy }) {
   return (
@@ -72,10 +69,10 @@ export default function PermissionsScreen({ navigation }) {
       setCamera(Boolean(cam?.granted));
     }
 
-    const SR = tryLoadSpeechRecognition();
-    if (SR?.getPermissionsAsync) {
-      const mic = await SR.getPermissionsAsync();
-      setVoiceCmd(Boolean(mic?.granted));
+    const speechMod = getSpeechRecognitionModule();
+    if (speechMod?.getPermissionsAsync) {
+      const mic = await speechMod.getPermissionsAsync();
+      setVoiceCmd(isSpeechPermissionGranted(mic));
     }
 
     setInternet(await loadInternetGemini());
@@ -117,17 +114,17 @@ export default function PermissionsScreen({ navigation }) {
         setVoiceCmd(false);
         return;
       }
-      const SR = tryLoadSpeechRecognition();
-      if (!SR?.requestPermissionsAsync) {
+      const speechMod = getSpeechRecognitionModule();
+      if (!speechMod) {
         Alert.alert(
           'Voice commands',
-          'Speech recognition needs a dev client build with expo-speech-recognition. You can still use on-screen buttons.'
+          'Speech recognition is not available in this build. Reinstall VisionAid from Xcode (expo run:ios --device), then try again.'
         );
         return;
       }
-      const res = await SR.requestPermissionsAsync();
-      setVoiceCmd(Boolean(res?.granted));
-      if (!res?.granted) {
+      const res = await ensureSpeechRecognitionPermissions(speechMod);
+      setVoiceCmd(isSpeechPermissionGranted(res));
+      if (!isSpeechPermissionGranted(res)) {
         Alert.alert('Microphone', 'Allow microphone access for hands-free phrases.');
       }
     } finally {
@@ -185,7 +182,7 @@ export default function PermissionsScreen({ navigation }) {
             colors={colors}
             icon="microphone"
             title="Voice Commands in English"
-            description="Hands-free phrase and speech recognition (dev build)."
+            description="Microphone and speech recognition for hands-free phrases."
             value={voiceCmd}
             busy={busyKey === 'voice'}
             onValueChange={(v) => void requestVoice(v)}
