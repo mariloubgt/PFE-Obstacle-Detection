@@ -20,6 +20,7 @@ _state: dict[str, Any] = {
     "enable_groq": None,
     "enable_gemini": None,
     "groq_min_interval_s": None,
+    "yolo_route": None,
 }
 
 
@@ -70,6 +71,17 @@ def get_groq_min_interval(default: float) -> float:
     return float(v) if v is not None else default
 
 
+def get_yolo_route(default: str) -> str:
+    with _lock:
+        v = _state.get("yolo_route")
+    if not v:
+        return default
+    route = str(v).strip().lower()
+    if route in ("auto", "both", "outdoor", "indoor", "fast"):
+        return route
+    return default
+
+
 def get_snapshot(
     *,
     model_path: str,
@@ -97,6 +109,9 @@ def get_snapshot(
             "groq_min_interval_s": get_groq_min_interval(
                 float(os.environ.get("GROQ_MIN_INTERVAL_S", "1.0"))
             ),
+            "yolo_route": get_yolo_route(
+                os.environ.get("YOLO_ROUTE", "fast").strip().lower() or "fast"
+            ),
         },
         "urls": {
             "localhost": f"http://127.0.0.1:{port}",
@@ -120,6 +135,7 @@ def apply_patch(patch: dict[str, Any]) -> dict[str, Any]:
         "enable_groq",
         "enable_gemini",
         "groq_min_interval_s",
+        "yolo_route",
     }
     applied: dict[str, Any] = {}
     with _lock:

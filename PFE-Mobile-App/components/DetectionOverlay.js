@@ -3,6 +3,24 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useThemeColors } from '../contexts/ThemeContext';
 import { FONTS } from '../constants/typography';
 
+function modelTag(model) {
+  const m = String(model || '').toLowerCase();
+  if (m === 'indoor') return 'IN';
+  if (m === 'outdoor') return 'OUT';
+  return '?';
+}
+
+function modelColors(model, colors) {
+  const m = String(model || '').toLowerCase();
+  if (m === 'indoor') {
+    return { border: '#A78BFA', fill: 'rgba(167,139,250,0.18)', labelBg: 'rgba(76,29,149,0.92)' };
+  }
+  if (m === 'outdoor') {
+    return { border: colors.teal, fill: colors.detectionBoxFill, labelBg: colors.detectionLabelBg };
+  }
+  return { border: colors.grey, fill: colors.detectionBoxFill, labelBg: colors.detectionLabelBg };
+}
+
 /**
  * Normalized boxes (0–1) from /predict, laid over the camera preview.
  */
@@ -17,15 +35,12 @@ export default function DetectionOverlay({ detections = [] }) {
         box: {
           position: 'absolute',
           borderWidth: 2,
-          borderColor: colors.teal,
           borderRadius: 4,
-          backgroundColor: colors.detectionBoxFill,
         },
         label: {
           position: 'absolute',
-          top: -18,
+          top: -20,
           left: -2,
-          backgroundColor: colors.detectionLabelBg,
           color: colors.tealBright,
           fontSize: 10,
           fontFamily: FONTS.en.bold,
@@ -46,9 +61,10 @@ export default function DetectionOverlay({ detections = [] }) {
         const w = (d.x2 - d.x1) * 100;
         const h = (d.y2 - d.y1) * 100;
         if (w <= 0 || h <= 0) return null;
+        const mc = modelColors(d.model, colors);
         return (
           <View
-            key={`${i}-${d.name}`}
+            key={`${i}-${d.name}-${d.model || 'x'}`}
             style={[
               styles.box,
               {
@@ -56,11 +72,16 @@ export default function DetectionOverlay({ detections = [] }) {
                 top: `${d.y1 * 100}%`,
                 width: `${w}%`,
                 height: `${h}%`,
+                borderColor: mc.border,
+                backgroundColor: mc.fill,
               },
             ]}
           >
-            <Text style={styles.label} numberOfLines={1}>
-              {(d.name || '').replace(/_/g, ' ')}
+            <Text
+              style={[styles.label, { backgroundColor: mc.labelBg }]}
+              numberOfLines={1}
+            >
+              {modelTag(d.model)} · {(d.name || '').replace(/_/g, ' ')}
               {d.distance_m != null && d.distance_m !== undefined
                 ? ` ~${Number(d.distance_m).toFixed(2)}m`
                 : ''}{' '}

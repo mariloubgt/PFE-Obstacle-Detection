@@ -5,8 +5,11 @@ import { useIsFocused } from '@react-navigation/native';
 import { loadAlertVolume } from '../utils/alertVolumeStorage';
 import { alertOutputState, applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
 
+/** Ignore volume-key describe briefly after a screen gains focus (avoids launch spam). */
+const FOCUS_GRACE_MS = 3500;
+
 /** Cooldown between hardware volume events (describe re-triggers). */
-const DESCRIBE_COOLDOWN_MS = 100;
+const DESCRIBE_COOLDOWN_MS = 900;
 
 /**
  * Physical volume buttons → scene describe. Restores level to {@link alertOutputState.baseline01}
@@ -27,8 +30,12 @@ export function useVolumeHardwareShortcut(navigation, options = {}) {
   }, [onDescribeEnvironment]);
 
   const isFocusedRef = useRef(isFocused);
+  const focusedAtRef = useRef(0);
   useEffect(() => {
     isFocusedRef.current = isFocused;
+    if (isFocused) {
+      focusedAtRef.current = Date.now();
+    }
   }, [isFocused]);
 
   const enabledRef = useRef(enabled);
@@ -103,6 +110,7 @@ export function useVolumeHardwareShortcut(navigation, options = {}) {
           return;
         }
         if (!enabledRef.current || !isFocusedRef.current) return;
+        if (Date.now() - focusedAtRef.current < FOCUS_GRACE_MS) return;
         const now = Date.now();
         if (now - lastFiredRef.current < DESCRIBE_COOLDOWN_MS) return;
         lastFiredRef.current = now;

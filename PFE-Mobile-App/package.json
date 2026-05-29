@@ -5,13 +5,17 @@
   "scripts": {
     "start": "expo start",
     "start:dev": "expo start --dev-client",
+    "start:lan": "expo start --dev-client --lan",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "ios:device": "expo run:ios --device",
+    "ios:dev": "expo run:ios --device",
+    "ios:release": "expo run:ios --configuration Release --device --no-bundler",
     "ios:pods": "cd ios && pod install",
     "web": "expo start --web",
     "sync-icons": "bash scripts/sync-native-icons.sh",
-    "ai-lab": "bash ../scripts/ai-lab-start.sh"
+    "ai-lab": "bash ../scripts/ai-lab-start.sh",
+    "wireless": "bash ../scripts/mobile-wireless.sh"
   },
   "dependencies": {
     "@expo-google-fonts/cairo": "^0.4.2",

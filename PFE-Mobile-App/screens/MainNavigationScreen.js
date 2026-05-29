@@ -8,7 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import {
-  InteractionManager,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -22,14 +22,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // Local Components & Utils
 import DangerAlertModal from '../components/DangerAlertModal';
 import DetectionOverlay from '../components/DetectionOverlay';
-import { predictImage } from '../services/predict';
+import { predictNavigationFrame } from '../services/predict';
 import { useThemeColors } from '../contexts/ThemeContext';
 import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
 import { buildTtsOptions } from '../utils/buildTtsOptions';
-import { speakAlert } from '../utils/speakAlert';
+import { speakAlert, stopSpeech, prepareSpeechAudio } from '../utils/speakAlert';
+import { captureAndDescribeScene } from '../utils/describeSceneFromCamera';
 import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
 import { pickCloseThreat } from '../utils/evaluateCloseThreat';
 import { isSimulatorDevice } from '../utils/isSimulator';
@@ -37,7 +38,6 @@ import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
 import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
 import { useDescribeEnvironmentHotword } from '../hooks/useDescribeEnvironmentHotword';
-import { triggerSceneDescribe } from './SceneQueryScreen';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back', front: 'front' };
@@ -86,7 +86,7 @@ function normClass(name) {
  * @param {Array} sortedDetections sorted by distance_m ascending
  * @param {{ current: { key: string } | null }} lockRef
  */
-function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.45) {
+function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.55) {
   if (!sortedDetections.length) {
     lockRef.current = null;
     return null;
@@ -114,7 +114,18 @@ function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.45) {
   return lockedDet;
 }
 
-const SPEAK_MIN_GAP_MS = 4000;
+const SPEAK_MIN_GAP_MS = 2800;
+/** Ignore weak or distance-less YOLO hits (avoids false "exit/car" speech). */
+const NAV_MIN_CONF = 0.35;
+
+function isValidNavDetection(d) {
+  const dist = d?.distance_m;
+  if (typeof dist !== 'number' || !Number.isFinite(dist)) return false;
+  if (dist <= 0.12 || dist >= 5.0) return false;
+  const conf = d?.confidence;
+  if (typeof conf === 'number' && conf < NAV_MIN_CONF) return false;
+  return true;
+}
 
 function formatMeters(m) {
   if (m == null || !Number.isFinite(m)) return null;
@@ -147,8 +158,10 @@ export default function MainNavigationScreen({ navigation }) {
   const [clock, setClock] = useState('00:00');
   const [aiTestEnabled, setAiTestEnabled] = useState(false);
   const [detections, setDetections] = useState([]);
+  const [detectionSummary, setDetectionSummary] = useState({ outdoor: 0, indoor: 0, route: 'fast' });
   const [inferenceMs, setInferenceMs] = useState(null);
   const [pipelineMs, setPipelineMs] = useState(null);
+  const [groqMs, setGroqMs] = useState(null);
   /** English context for UI + voice (MobileNet label or scene). */
   const [voiceContextHint, setVoiceContextHint] = useState(null);
   const [inferenceError, setInferenceError] = useState(null);
@@ -185,6 +198,7 @@ export default function MainNavigationScreen({ navigation }) {
   const hadObstacleRef = useRef(false);
   /** Lock TTS + overlay on one obstacle until another is clearly closer */
   const primaryLockRef = useRef(null);
+  const lastPipelineMsRef = useRef(1500);
   const manualSuppressRef = useRef(false);
   const alertVolumeRef = useRef(alertVolume);
   const [aiFrameMs, setAiFrameMs] = useState(DEFAULTS.aiFrameMs);
@@ -256,6 +270,9 @@ export default function MainNavigationScreen({ navigation }) {
 
   useEffect(() => {
     aiTestRef.current = aiTestEnabled;
+    if (aiTestEnabled) {
+      void prepareSpeechAudio(true);
+    }
   }, [aiTestEnabled]);
 
   /** Voice command "activate navigation" → enable AI test (which now does navigation too). */
@@ -272,19 +289,40 @@ export default function MainNavigationScreen({ navigation }) {
     speakAlert('Navigation stopped.', ttsOpts());
   }, [ttsOpts]);
 
-  /** Sound / volume key / hotword → open Scene Query then call describe directly.
-   *  Uses a module-level callback so it works whether the screen is new or already focused. */
-  const openSceneQueryWithDescribe = useCallback(() => {
-    navigation.navigate('SceneQuery');
-    InteractionManager.runAfterInteractions(() => {
-      setTimeout(() => triggerSceneDescribe(), 150);
-    });
-  }, [navigation]);
+  const describeInFlightRef = useRef(false);
+
+  /** Groq describe on the live nav camera — stays on detection screen. */
+  const runDescribeInPlace = useCallback(async () => {
+    if (describeInFlightRef.current) return;
+    describeInFlightRef.current = true;
+    stopSpeech();
+    try {
+      if (Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      }
+      const res = await captureAndDescribeScene(cameraRef);
+      if (!res.ok) {
+        if (res.error) speakAlert(res.error, ttsOpts());
+        return;
+      }
+      if (res.text && res.shouldSpeak) {
+        speakAlert(res.text, ttsOpts());
+      }
+    } finally {
+      describeInFlightRef.current = false;
+    }
+  }, [ttsOpts]);
 
   useVolumeHardwareShortcut(navigation, {
     enabled: !volumeOpen,
     action: volumeHardwareAction,
-    onDescribeEnvironment: openSceneQueryWithDescribe,
+    onDescribeEnvironment: () => {
+      if (volumeHardwareAction === 'scene_query') {
+        navigation.navigate('SceneQuery');
+        return;
+      }
+      void runDescribeInPlace();
+    },
   });
 
   const { requestVoiceListen } = useDescribeEnvironmentHotword({
@@ -292,7 +330,7 @@ export default function MainNavigationScreen({ navigation }) {
     cameraRef,
     alertVolumeRef,
     getTtsOpts: ttsOpts,
-    onPhraseMatched: openSceneQueryWithDescribe,
+    onPhraseMatched: runDescribeInPlace,
     onActivateNavigation,
     onStopNavigation,
     onListeningChange: setVoiceListening,
@@ -310,7 +348,7 @@ export default function MainNavigationScreen({ navigation }) {
       case 'starting':
         return 'Hands-free on — tap here when ready to speak';
       case 'denied':
-        return 'Voice blocked — Settings → VisionAid → Microphone + Speech Recognition';
+        return 'Voice blocked — tap here, then allow Microphone + Speech Recognition';
       case 'unavailable':
         return voiceDetail || 'Voice unavailable — reinstall from Xcode (▶ Run on iPhone)';
       case 'paused':
@@ -322,7 +360,17 @@ export default function MainNavigationScreen({ navigation }) {
 
   const voiceBannerTappable =
     handsFreeDescribe &&
-    (voiceStatus === 'ready' || voiceStatus === 'starting');
+    (voiceStatus === 'ready' ||
+      voiceStatus === 'starting' ||
+      voiceStatus === 'denied');
+
+  const onVoiceBannerPress = useCallback(() => {
+    if (voiceStatus === 'denied') {
+      Linking.openSettings().catch(() => {});
+      return;
+    }
+    requestVoiceListen();
+  }, [voiceStatus, requestVoiceListen]);
 
   /** Spoken cue when toggling hands-free from Settings — avoid first mount */
   const announceHandsFreeInitialized = useRef(false);
@@ -339,7 +387,7 @@ export default function MainNavigationScreen({ navigation }) {
     );
   }, [handsFreeDescribe]);
 
-  /** TTS only when YOLO sees an obstacle (silent when path is clear). */
+  /** TTS only when YOLO sees a validated obstacle (silent when path is clear). */
   const speakYoloDetection = useCallback((primaryOnly) => {
     if (!primaryOnly.length) {
       hadObstacleRef.current = false;
@@ -348,14 +396,15 @@ export default function MainNavigationScreen({ navigation }) {
     }
 
     const d0 = primaryOnly[0];
+    if (!isValidNavDetection(d0)) return;
+
     const dist = Math.max(0.2, Math.round((d0.distance_m || 0) * 10) / 10);
     const obKey = `${d0.name}|${dist}`;
 
-    // Already spoke for this obstacle — stay silent until it changes or disappears.
-    if (obKey === lastTtsKeyRef.current) return;
-
     const now = Date.now();
-    if (now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS) return;
+    if (obKey === lastTtsKeyRef.current && now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS) {
+      return;
+    }
 
     const label = englishLabelForClass(d0.name);
     const cx = ((d0.x1 ?? 0) + (d0.x2 ?? 1)) / 2;
@@ -368,6 +417,68 @@ export default function MainNavigationScreen({ navigation }) {
     hadObstacleRef.current = true;
     speakAlert(msg, { ...ttsOpts(), latest: true });
   }, [ttsOpts]);
+
+  /** Groq speaks first; YOLO emergency/fallback only when Groq has no guidance. */
+  const speakNavigationVoice = useCallback((groq, primaryOnly) => {
+    const guidance =
+      typeof groq?.guidance_en === 'string' ? groq.guidance_en.trim() : '';
+    const risk = typeof groq?.risk === 'string' ? groq.risk.toLowerCase() : 'ok';
+    const hasValidYolo = primaryOnly.some(isValidNavDetection);
+    const now = Date.now();
+
+    if (guidance) {
+      if (
+        risk === 'ok' &&
+        /continue forward\.?$/i.test(guidance) &&
+        !hasValidYolo
+      ) {
+        hadObstacleRef.current = false;
+        lastTtsKeyRef.current = '';
+        return;
+      }
+
+      const groqKey = `${risk}|${guidance.slice(0, 100)}`;
+      if (
+        groqKey === lastTtsKeyRef.current &&
+        now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS
+      ) {
+        return;
+      }
+
+      lastTtsKeyRef.current = groqKey;
+      lastSpeakAtRef.current = now;
+      hadObstacleRef.current = true;
+      speakAlert(guidance, {
+        ...ttsOpts(),
+        latest: true,
+        interrupt: risk === 'danger' || risk === 'caution',
+      });
+      return;
+    }
+
+    const threshold = prefsRef.current.dangerThresholdM ?? DEFAULTS.dangerThresholdM;
+    const closest = primaryOnly[0];
+    if (
+      closest &&
+      isValidNavDetection(closest) &&
+      closest.distance_m < threshold &&
+      now - lastEmergencyAtRef.current >= 6000
+    ) {
+      lastEmergencyAtRef.current = now;
+      const dist = Math.max(0.2, Math.round(closest.distance_m * 10) / 10);
+      const label = englishLabelForClass(closest.name);
+      const cx = ((closest.x1 ?? 0) + (closest.x2 ?? 1)) / 2;
+      const side =
+        cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
+      const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
+      lastTtsKeyRef.current = `stop|${closest.name}|${dist}`;
+      lastSpeakAtRef.current = now;
+      speakAlert(msg, { ...ttsOpts(), pitch: 1.05, interrupt: true });
+      return;
+    }
+
+    speakYoloDetection(primaryOnly);
+  }, [speakYoloDetection, ttsOpts]);
 
   const onCameraTap = useCallback(() => {
     if (Platform.OS !== 'web') {
@@ -389,26 +500,6 @@ export default function MainNavigationScreen({ navigation }) {
     }
   }, []);
 
-  /** Emergency stop rule: obstacle within danger threshold → speak (6s cooldown). */
-  const speakEmergencyIfNeeded = useCallback((primaryOnly) => {
-    if (!aiTestRef.current) return false;
-    const threshold = prefsRef.current.dangerThresholdM ?? DEFAULTS.dangerThresholdM;
-    const closest = primaryOnly[0];
-    if (!closest || typeof closest.distance_m !== 'number') return false;
-    if (closest.distance_m >= threshold) return false;
-    const now = Date.now();
-    if (now - lastEmergencyAtRef.current < 6000) return false;
-    lastEmergencyAtRef.current = now;
-
-    const dist = Math.max(0.2, Math.round(closest.distance_m * 10) / 10);
-    const label = englishLabelForClass(closest.name);
-    const cx = ((closest.x1 ?? 0) + (closest.x2 ?? 1)) / 2;
-    const side = cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
-    const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
-    speakAlert(msg, { ...ttsOpts(), pitch: 1.05, interrupt: true });
-    return true;
-  }, [ttsOpts]);
-
   // --- AI Loop (non-overlapping frames + smoothed distances) ---
   const runFrame = useCallback(async () => {
     if (
@@ -423,34 +514,43 @@ export default function MainNavigationScreen({ navigation }) {
       if (!api) return;
       const prefs = prefsRef.current;
       const photo = await cameraRef.current.takePictureAsync({
-        quality: prefs.lowLight ? 0.38 : 0.22,
+        quality: prefs.lowLight ? 0.28 : 0.15,
         skipProcessing: true,
       });
       const po = predictOptsRef.current;
-      const data = await predictImage(api, photo.uri, {
+      const data = await predictNavigationFrame(api, photo.uri, {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-        useGemini: po.useGemini,
-        useGroq: false,
       });
 
-      const valid = (data.detections || []).filter((d) => d.distance_m < 5.0);
+      const valid = (data.detections || []).filter(isValidNavDetection);
       const smoothed = smoothDetectionDistances(valid, smoothStateRef);
       const sorted = [...smoothed].sort(
         (a, b) => (a.distance_m ?? 99) - (b.distance_m ?? 99)
       );
       const primary = pickLockedPrimary(sorted, primaryLockRef);
       const primaryOnly = primary ? [primary] : [];
+      const overlayDets = sorted.slice(0, 4);
+      const outdoorN = sorted.filter((d) => d.model === 'outdoor').length;
+      const indoorN = sorted.filter((d) => d.model === 'indoor').length;
 
       if (!aiTestRef.current) return;
 
-      setDetections(primaryOnly);
+      setDetections(overlayDets);
+      setDetectionSummary({
+        outdoor: outdoorN,
+        indoor: indoorN,
+        route: data?.yolo_route || 'fast',
+      });
       setInferenceMs(data.inference_ms ?? null);
       setPipelineMs(data.pipeline_ms ?? null);
+      setGroqMs(data.groq?.ms ?? null);
+      if (data.pipeline_ms) {
+        lastPipelineMsRef.current = data.pipeline_ms;
+      }
       const ctx =
-        (typeof data.gemini?.focus === 'string' && data.gemini.focus.trim()) ||
-        (typeof data.scene?.top5?.[0]?.label === 'string' &&
-          data.scene.top5[0].label.trim()) ||
+        (typeof data.groq?.guidance_en === 'string' && data.groq.guidance_en.trim()) ||
+        (typeof data.groq?.scene === 'string' && data.groq.scene.trim()) ||
         null;
       setVoiceContextHint(ctx);
       setInferenceError(null);
@@ -478,39 +578,63 @@ export default function MainNavigationScreen({ navigation }) {
         }
       }
 
-      if (!speakEmergencyIfNeeded(primaryOnly)) {
-        speakYoloDetection(primaryOnly);
-      }
+      speakNavigationVoice(data.groq, primaryOnly);
     } catch (e) {
       if (aiTestRef.current) setInferenceError(e.message);
     } finally {
       inFlightRef.current = false;
     }
-  }, [speakEmergencyIfNeeded, speakYoloDetection]);
+  }, [speakNavigationVoice]);
 
   useEffect(() => {
-    let yoloInterval = null;
+    let cancelled = false;
+    let timer = null;
+
+    const scheduleNext = (delayMs) => {
+      if (cancelled || !aiTestRef.current) return;
+      timer = setTimeout(() => {
+        void tick();
+      }, delayMs);
+    };
+
+    const tick = async () => {
+      if (cancelled || !aiTestRef.current) return;
+      const t0 = Date.now();
+      await runFrame();
+      if (cancelled || !aiTestRef.current) return;
+      const elapsed = Date.now() - t0;
+      const targetGap = Math.max(
+        aiFrameMs,
+        Math.round(lastPipelineMsRef.current * 1.05)
+      );
+      const wait = Math.max(300, targetGap - elapsed);
+      scheduleNext(wait);
+    };
+
     if (aiTestEnabled) {
       smoothStateRef.current = {};
       lastTtsKeyRef.current = '';
       hadObstacleRef.current = false;
       primaryLockRef.current = null;
       lastEmergencyAtRef.current = 0;
-      runFrame();
-      yoloInterval = setInterval(runFrame, aiFrameMs);
+      void tick();
     } else {
       Speech.stop();
       lastTtsKeyRef.current = '';
       smoothStateRef.current = {};
       setDetections([]);
+      setDetectionSummary({ outdoor: 0, indoor: 0, route: 'fast' });
       setInferenceMs(null);
+      setPipelineMs(null);
+      setGroqMs(null);
       setVoiceContextHint(null);
       setInferenceError(null);
       setDangerPayload(null);
       manualSuppressRef.current = false;
     }
     return () => {
-      if (yoloInterval) clearInterval(yoloInterval);
+      cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [aiTestEnabled, aiFrameMs, runFrame]);
 
@@ -590,7 +714,7 @@ export default function MainNavigationScreen({ navigation }) {
               if (Platform.OS !== 'web') {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
               }
-              openSceneQueryWithDescribe();
+              runDescribeInPlace();
             }}
             hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
             accessibilityRole="button"
@@ -632,13 +756,15 @@ export default function MainNavigationScreen({ navigation }) {
                   styles.voiceListenBannerWarn,
                 voiceStatus === 'listening' && styles.voiceListenBannerActive,
               ]}
-              onPress={voiceBannerTappable ? () => requestVoiceListen() : undefined}
+              onPress={voiceBannerTappable ? onVoiceBannerPress : undefined}
               disabled={!voiceBannerTappable}
               accessibilityRole="button"
               accessibilityLabel={
-                voiceBannerTappable
-                  ? 'Start listening for voice command'
-                  : voiceBannerText
+                voiceStatus === 'denied'
+                  ? 'Open iPhone Settings to allow microphone and speech recognition'
+                  : voiceBannerTappable
+                    ? 'Start listening for voice command'
+                    : voiceBannerText
               }
             >
               <MaterialCommunityIcons
@@ -732,7 +858,7 @@ export default function MainNavigationScreen({ navigation }) {
                     {detections.length > 0
                       ? `${detections[0].name.replace(/_/g, ' ')} · ${
                           formatMeters(detections[0].distance_m) ?? '—'
-                        }`
+                        } · ${detections[0].model === 'indoor' ? 'indoor' : detections[0].model === 'outdoor' ? 'outdoor' : 'yolo'}`
                       : 'Searching…'}
                   </Text>
                   {detections.length > 0 && formatMeters(detections[0].distance_m) ? (
@@ -743,7 +869,7 @@ export default function MainNavigationScreen({ navigation }) {
                   ) : null}
                   {voiceContextHint ? (
                     <>
-                      <Text style={styles.cardSectionLabel}>Scene context</Text>
+                      <Text style={styles.cardSectionLabel}>Groq guidance</Text>
                       <Text style={styles.voiceContextHint}>{voiceContextHint}</Text>
                     </>
                   ) : null}
@@ -751,8 +877,13 @@ export default function MainNavigationScreen({ navigation }) {
                   <Text style={styles.inferenceMeta}>
                     {Math.round(pipelineMs || 0)} ms total
                     {inferenceMs != null ? ` · YOLO ${Math.round(inferenceMs)} ms` : ''}
-                    {' · '}
-                    {detections.length} {detections.length === 1 ? 'object' : 'objects'} tracked
+                    {groqMs != null && groqMs > 0 ? ` · Groq ${Math.round(groqMs)} ms` : ''}
+                    {' · route '}
+                    {detectionSummary.route}
+                    {' · OUT '}
+                    {detectionSummary.outdoor}
+                    {' · IN '}
+                    {detectionSummary.indoor}
                     {detections.length > 0 && formatMeters(detections[0].distance_m)
                       ? ` · closest ${formatMeters(detections[0].distance_m)}`
                       : ''}
@@ -764,8 +895,8 @@ export default function MainNavigationScreen({ navigation }) {
             <>
               <Text style={styles.alertTitle}>AI System Idle</Text>
               <Text style={styles.alertSub}>
-                Tap Sound to open scene description and automatically hear a new summary. Go back and
-                tap Sound again anytime. Long-press Sound for alert volume.
+                Tap AI test to start obstacle detection. Tap Sound when you want a spoken scene
+                description — you stay on this camera view.
               </Text>
             </>
           )}
@@ -781,7 +912,7 @@ export default function MainNavigationScreen({ navigation }) {
             if (Platform.OS !== 'web') {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
             }
-            openSceneQueryWithDescribe();
+            runDescribeInPlace();
           }}
           onLongPress={() => {
             if (Platform.OS !== 'web') {
@@ -791,8 +922,8 @@ export default function MainNavigationScreen({ navigation }) {
           }}
           delayLongPress={3000}
           accessibilityRole="button"
-          accessibilityLabel="Scene description — opens Scene Query"
-          accessibilityHint="Opens Scene Query and reads a scene description. Press and hold to open alert volume slider."
+          accessibilityLabel="Scene description — speak summary from live camera"
+          accessibilityHint="Reads a Groq scene description without leaving navigation. Press and hold for alert volume."
         >
           <MaterialCommunityIcons name="volume-high" size={26} color={colors.tealBright} />
           <Text style={styles.navLabel}>Sound</Text>

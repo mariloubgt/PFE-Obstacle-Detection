@@ -19,7 +19,7 @@ export const DEFAULTS = {
   speechRate: 0.95,
   vibrationDanger: true,
   dangerThresholdM: 0.8,
-  aiFrameMs: 1000,
+  aiFrameMs: 1500,
   lowLight: true,
   primaryLang: 'en',
   internetGemini: false,
@@ -31,7 +31,7 @@ export const DEFAULTS = {
    * Physical volume keys: 'describe' = spoken scene summary, 'scene_query' = voice Q&A screen, 'none' = off
    * @type {'none'|'describe'|'scene_query'}
    */
-  volumeHardwareAction: 'describe',
+  volumeHardwareAction: 'none',
   /** When true, listen for the phrase "describe environment" on the nav screen (uses speech recognition + may pause camera briefly). */
   handsFreeDescribe: false,
   /** Display: night_shift (dark) or white_shift (light) */

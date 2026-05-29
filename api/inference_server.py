@@ -68,6 +68,75 @@ def _parse_opt_float(value: Optional[str], default: float, lo: float, hi: float)
     return max(lo, min(hi, x))
 
 
+YOLO_ROUTE = os.environ.get("YOLO_ROUTE", "fast").strip().lower()
+YOLO_INDOOR_EVERY_N = max(1, int(os.environ.get("YOLO_INDOOR_EVERY_N", "2")))
+YOLO_MAX_LONG_EDGE = max(640, int(os.environ.get("YOLO_MAX_LONG_EDGE", "1280")))
+_fast_frame_counter = 0
+_last_outdoor_dets: list[dict[str, Any]] = []
+_last_indoor_dets: list[dict[str, Any]] = []
+
+# Class → preferred head when both models see the same object (smart merge).
+INDOOR_PREFERRED = frozenset(
+    {
+        "stairs",
+        "chair",
+        "couch",
+        "bed",
+        "dining_table",
+        "toilet",
+        "tv",
+        "laptop",
+        "microwave",
+        "oven",
+        "refrigerator",
+        "sink",
+        "bench",
+        "crutch",
+        "door",
+        "table",
+        "potted_plant",
+    }
+)
+OUTDOOR_PREFERRED = frozenset(
+    {
+        "car",
+        "bus",
+        "truck",
+        "motorcycle",
+        "bicycle",
+        "curb",
+        "bus_stop",
+        "pole",
+        "street_light",
+        "traffic_light",
+        "stop_sign",
+        "fire_hydrant",
+        "warning_column",
+        "spherical_roadblock",
+        "train",
+        "waste_container",
+    }
+)
+
+
+def _merge_rank(d: dict[str, Any]) -> float:
+    """Higher = keep this detection when indoor/outdoor overlap."""
+    conf = float(d.get("confidence", 0))
+    name = str(d.get("name", "")).lower()
+    source = str(d.get("model", "")).lower()
+    if name in INDOOR_PREFERRED:
+        if source == "indoor":
+            conf += 0.12
+        elif source == "outdoor":
+            conf -= 0.08
+    elif name in OUTDOOR_PREFERRED:
+        if source == "outdoor":
+            conf += 0.12
+        elif source == "indoor":
+            conf -= 0.08
+    return conf
+
+
 def _box_iou(a: dict[str, Any], b: dict[str, Any]) -> float:
     ax1, ay1, ax2, ay2 = a["x1"], a["y1"], a["x2"], a["y2"]
     bx1, by1, bx2, by2 = b["x1"], b["y1"], b["x2"], b["y2"]
@@ -86,7 +155,7 @@ def _box_iou(a: dict[str, Any], b: dict[str, Any]) -> float:
 def _merge_detections(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ranked = sorted(
         items,
-        key=lambda d: (-float(d.get("confidence", 0)), float(d.get("distance_m") or 99)),
+        key=lambda d: (-_merge_rank(d), float(d.get("distance_m") or 99)),
     )
     kept: list[dict[str, Any]] = []
     for d in ranked:
@@ -125,12 +194,20 @@ _yolo_pool = ThreadPoolExecutor(max_workers=2)
 _gemini_status: dict[str, Any] = {"enabled": False, "model": None, "ok": False, "error": "Not checked yet"}
 
 
-def _extract_detections(result, img_w: int, img_h: int, req_hfov: float, req_scale: float, source: str) -> list[dict[str, Any]]:
+def _extract_detections(
+    result,
+    img_w: int,
+    img_h: int,
+    req_hfov: float,
+    req_scale: float,
+    source: str,
+    box_scale: float = 1.0,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     names_map = result.names
     for box in result.boxes:
         xyxy = box.xyxy[0].cpu().numpy()
-        x1, y1, x2, y2 = [float(v) for v in xyxy]
+        x1, y1, x2, y2 = [float(v) * box_scale for v in xyxy]
         cls_id = int(box.cls[0])
         conf = float(box.conf[0])
         name = names_map.get(cls_id, str(cls_id))
@@ -159,12 +236,25 @@ def _extract_detections(result, img_w: int, img_h: int, req_hfov: float, req_sca
     return out
 
 
+def _downscale_for_yolo(img: Image.Image) -> tuple[Image.Image, float]:
+    """Shrink huge phone photos before YOLO (boxes stay mapped to original size)."""
+    w, h = img.size
+    long_edge = max(w, h)
+    if long_edge <= YOLO_MAX_LONG_EDGE:
+        return img, 1.0
+    scale = YOLO_MAX_LONG_EDGE / long_edge
+    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    return img.resize(new_size, Image.LANCZOS), scale
+
+
 def _predict_one(yolo_model: YOLO, img: Image.Image, source: str, req_hfov: float, req_scale: float) -> tuple[list[dict[str, Any]], float]:
+    orig_w, orig_h = img.size
+    yolo_img, scale = _downscale_for_yolo(img)
     t0 = time.perf_counter()
     yolo_conf = runtime_lab.get_yolo_conf(CONF)
     yolo_imgsz = runtime_lab.get_yolo_imgsz(YOLO_IMGSZ)
     result = yolo_model.predict(
-        img,
+        yolo_img,
         conf=yolo_conf,
         iou=YOLO_IOU,
         imgsz=yolo_imgsz,
@@ -172,15 +262,49 @@ def _predict_one(yolo_model: YOLO, img: Image.Image, source: str, req_hfov: floa
         verbose=False,
     )[0]
     ms = (time.perf_counter() - t0) * 1000.0
-    w, h = img.size
-    return _extract_detections(result, w, h, req_hfov, req_scale, source), ms
+    box_scale = 1.0 / scale if scale != 1.0 else 1.0
+    return _extract_detections(
+        result, orig_w, orig_h, req_hfov, req_scale, source, box_scale=box_scale
+    ), ms
 
 
 def _run_dual_yolo(img: Image.Image, req_hfov: float, req_scale: float) -> tuple[list[dict[str, Any]], float]:
+    global _fast_frame_counter, _last_outdoor_dets, _last_indoor_dets
+
+    route = runtime_lab.get_yolo_route(YOLO_ROUTE)
+    if route not in ("auto", "both", "outdoor", "indoor", "fast"):
+        route = "fast"
+
+    if route == "outdoor" and model_outdoor is not None:
+        return _predict_one(model_outdoor, img, "outdoor", req_hfov, req_scale)
+    if route == "indoor" and model_indoor is not None:
+        return _predict_one(model_indoor, img, "indoor", req_hfov, req_scale)
+
+    # Smooth real-time: outdoor every frame, indoor every Nth frame, merge cached heads.
+    if route == "fast":
+        total_ms = 0.0
+        if model_outdoor is not None:
+            _last_outdoor_dets, ms = _predict_one(
+                model_outdoor, img, "outdoor", req_hfov, req_scale
+            )
+            total_ms = max(total_ms, ms)
+        _fast_frame_counter += 1
+        run_indoor = (
+            model_indoor is not None
+            and (_fast_frame_counter % YOLO_INDOOR_EVERY_N == 0)
+        )
+        if run_indoor:
+            _last_indoor_dets, ms_in = _predict_one(
+                model_indoor, img, "indoor", req_hfov, req_scale
+            )
+            total_ms = max(total_ms, ms_in)
+        combined = list(_last_outdoor_dets) + list(_last_indoor_dets)
+        return _merge_detections(combined), total_ms
+
     jobs: list[tuple[YOLO, str]] = []
     if model_outdoor is not None:
         jobs.append((model_outdoor, "outdoor"))
-    if model_indoor is not None:
+    if model_indoor is not None and route in ("auto", "both"):
         jobs.append((model_indoor, "indoor"))
     if not jobs:
         return [], 0.0
@@ -197,7 +321,8 @@ def _run_dual_yolo(img: Image.Image, req_hfov: float, req_scale: float) -> tuple
         dets, ms = fut.result()
         combined.extend(dets)
         total_ms = max(total_ms, ms)
-    return _merge_detections(combined), total_ms
+    merged = _merge_detections(combined)
+    return merged, total_ms
 
 
 def _load_yolo_models(outdoor_path: Path, indoor_path: Path) -> list[str]:
@@ -231,8 +356,8 @@ def load_model():
         )
 
     print(
-        f"YOLO ready ({', '.join(loaded)}) — conf={CONF}, iou={YOLO_IOU}, "
-        f"imgsz={YOLO_IMGSZ}, max_det={YOLO_MAX_DET}"
+        f"YOLO ready ({', '.join(loaded)}) — route={YOLO_ROUTE}, conf={CONF}, "
+        f"iou={YOLO_IOU}, imgsz={YOLO_IMGSZ}, max_det={YOLO_MAX_DET}"
     )
 
     gst = groq_status()
@@ -279,6 +404,7 @@ def health() -> dict[str, Any]:
         "model_path_indoor": str(INDOOR_PATH),
         "outdoor_loaded": model_outdoor is not None,
         "indoor_loaded": model_indoor is not None,
+        "yolo_route": snap["effective"].get("yolo_route", YOLO_ROUTE),
         "yolo_conf": snap["effective"]["yolo_conf"],
         "yolo_imgsz": snap["effective"]["yolo_imgsz"],
         "horizontal_fov_deg": HFOV_DEG,
@@ -352,7 +478,7 @@ async def predict(
     img = Image.open(io.BytesIO(content)).convert("RGB")
     img = ImageOps.exif_transpose(img)
     w, h = img.size
-    print(f"\n[/predict] New request — image={w}x{h}, detailed={detailed}, use_groq={use_groq}({groq_mode}), use_gemini={use_gemini}")
+    print(f"\n[/predict] New request — image={w}x{h}, route={runtime_lab.get_yolo_route(YOLO_ROUTE)}, detailed={detailed}, use_groq={use_groq}({groq_mode}), use_gemini={use_gemini}")
 
     req_hfov = _parse_opt_float(hfov_deg, HFOV_DEG, 40.0, 95.0)
     req_scale = _parse_opt_float(depth_scale, DEPTH_SCALE_ENV, 0.35, 2.5)
@@ -433,6 +559,7 @@ async def predict(
     return {
         "detections": detections,
         "inference_ms": round(yolo_ms, 2),
+        "yolo_route": runtime_lab.get_yolo_route(YOLO_ROUTE),
         "scene": {"top5": scene_list},
         "groq": groq_result,
         "gemini": gem,

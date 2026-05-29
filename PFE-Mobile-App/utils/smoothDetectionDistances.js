@@ -7,9 +7,9 @@
  * - Sortie : si la variation est < 3 cm vs l’affichage précédent, on garde la même valeur.
  */
 
-const MEDIAN_LEN = 5;
-const EMA_ALPHA = 0.22;
-const OUTPUT_DEADBAND_M = 0.03;
+const MEDIAN_LEN = 7;
+const EMA_ALPHA = 0.16;
+const OUTPUT_DEADBAND_M = 0.05;
 
 function median(arr) {
   if (arr.length === 0) return null;
@@ -51,7 +51,8 @@ export function smoothDetectionDistances(detections, stateRef) {
   for (let slot = 0; slot < valid.length; slot += 1) {
     const { d, i, raw } = valid[slot];
     const cls = String(d.name || 'obstacle').toLowerCase();
-    const key = `${cls}#${slot}`;
+    const head = String(d.model || 'any').toLowerCase();
+    const key = `${cls}#${slot}#${head}`;
     seen.add(key);
 
     let hist = state.history[key];

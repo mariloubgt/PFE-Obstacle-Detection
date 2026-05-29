@@ -11,14 +11,11 @@ import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { useThemeColors } from '../contexts/ThemeContext';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
-import { predictImage } from '../services/predict';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
-import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
 import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
-import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { buildTtsOptions } from '../utils/buildTtsOptions';
 import { speakAlert, stopSpeech } from '../utils/speakAlert';
-import { describeFromDetections } from '../utils/describeFromDetections';
+import { captureAndDescribeScene } from '../utils/describeSceneFromCamera';
 import { isSimulatorDevice } from '../utils/isSimulator';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
@@ -32,7 +29,7 @@ export function triggerSceneDescribe() {
 }
 
 const WELCOME_MESSAGE =
-  'Use Sound (top right), Describe scene, or Sound on the main screen — each tap runs a fresh description.';
+  'Tap Describe scene or the Sound icon for a spoken summary. On the main screen, Sound also describes without leaving the camera.';
 
 function nextId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -137,70 +134,20 @@ export default function SceneQueryScreen({ navigation }) {
         return;
       }
 
-      let photo;
-      try {
-        photo = await cameraRef.current.takePictureAsync({
-          quality: 0.28,
-          skipProcessing: true,
-        });
-      } catch (camErr) {
+      const res = await captureAndDescribeScene(cameraRef);
+      if (stale()) return;
+      if (!res.ok) {
         appendMessage({
           id: nextId(),
           role: 'assistant',
-          text:
-            camErr instanceof Error
-              ? `Could not capture a frame: ${camErr.message}`
-              : 'Could not capture a camera frame.',
+          text: res.error || 'Could not describe the scene.',
         });
         return;
       }
 
-      if (stale()) return;
-
-      const api = await loadInferenceApiUrl();
-      if (stale()) return;
-      if (!api) {
-        appendMessage({
-          id: nextId(),
-          role: 'assistant',
-          text: 'Set the inference server address in Settings.',
-        });
-        return;
-      }
-
-      const prefs = await loadAppPreferences();
-      if (stale()) return;
-      const predictOpts = await getPredictOptionsForRequest(prefs);
-      prefsRef.current = prefs;
-      let data;
-      try {
-        data = await predictImage(api, photo.uri, {
-          ...predictOpts,
-          useGroq: false,
-          useGemini: false,
-        });
-      } catch (netErr) {
-        if (stale()) return;
-        const msg =
-          netErr instanceof Error ? netErr.message : String(netErr ?? 'Network error');
-        appendMessage({
-          id: nextId(),
-          role: 'assistant',
-          text: msg.length > 200 ? 'Could not reach the inference server.' : msg,
-        });
-        return;
-      }
-
-      if (stale()) return;
-
-      const visible = (data?.detections || []).filter(
-        (d) => typeof d?.distance_m === 'number' && d.distance_m < 5
-      );
-      const toSpeak = describeFromDetections(visible);
-
-      appendMessage({ id: nextId(), role: 'assistant', text: toSpeak });
-      if (visible.length > 0) {
-        speakReply(toSpeak);
+      appendMessage({ id: nextId(), role: 'assistant', text: res.text });
+      if (res.text && res.shouldSpeak) {
+        speakReply(res.text);
       }
     } finally {
       if (generation === describeGenerationRef.current) {

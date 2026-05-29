@@ -98,6 +98,21 @@ export async function predictImage(apiBase, imageUri, options = {}) {
   return data;
 }
 
+/**
+ * Navigation: YOLO boxes + Groq navigate voice (Groq speaks; YOLO is fallback only).
+ */
+export async function predictNavigationFrame(apiBase, imageUri, options = {}) {
+  const { hfovDeg, depthScale } = options;
+  return predictImage(apiBase, imageUri, {
+    hfovDeg,
+    depthScale,
+    useGemini: false,
+    useGroq: true,
+    groqMode: 'navigate',
+    detailed: false,
+  });
+}
+
 export async function fetchHealth(apiBase) {
   const base = (apiBase || '').replace(/\/$/, '');
   if (!base.startsWith('http')) {

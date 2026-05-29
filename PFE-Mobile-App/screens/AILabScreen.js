@@ -58,6 +58,7 @@ export default function AILabScreen({ navigation }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [groqModel, setGroqModel] = useState('');
+  const [yoloRoute, setYoloRoute] = useState('fast');
   const [presetLabel, setPresetLabel] = useState('');
 
   const refresh = useCallback(async () => {
@@ -94,6 +95,7 @@ export default function AILabScreen({ navigation }) {
       }
       const eff = r.lab?.effective;
       if (eff?.groq_model) setGroqModel(eff.groq_model);
+      if (eff?.yolo_route) setYoloRoute(eff.yolo_route);
     } catch (e) {
       setProbe(null);
       setMsg(e.message || String(e));
@@ -119,6 +121,7 @@ export default function AILabScreen({ navigation }) {
         groq_model: groqModel.trim() || undefined,
         enable_groq: labOpts.useGroq,
         enable_gemini: labOpts.useGemini,
+        yolo_route: yoloRoute,
       });
       setProbe({ health: { ok: true }, lab: r.lab });
       setMsg('Server lab config updated (no restart needed).');
@@ -127,7 +130,7 @@ export default function AILabScreen({ navigation }) {
     } finally {
       setBusy(false);
     }
-  }, [apiUrl, groqModel, labOpts]);
+  }, [apiUrl, groqModel, labOpts, yoloRoute]);
 
   const onResetServer = useCallback(async () => {
     try {
@@ -278,6 +281,22 @@ export default function AILabScreen({ navigation }) {
         </View>
 
         <Text style={styles.section}>Server runtime (no restart)</Text>
+        <Text style={styles.sectionHint}>
+          YOLO route — fast = smooth (~1s/frame). auto = both models every frame (~2.5s).
+        </Text>
+        <View style={styles.chipRow}>
+          {['fast', 'auto', 'both', 'outdoor', 'indoor'].map((mode) => (
+            <Pressable
+              key={mode}
+              style={[styles.chipBtn, yoloRoute === mode && styles.chipBtnOn]}
+              onPress={() => setYoloRoute(mode)}
+            >
+              <Text style={[styles.chipBtnText, yoloRoute === mode && styles.chipBtnTextOn]}>
+                {mode}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
         <TextInput
           style={styles.input}
           value={groqModel}
@@ -301,6 +320,7 @@ export default function AILabScreen({ navigation }) {
             <Text style={styles.configLine}>
               conf {probe.lab.effective.yolo_conf} · imgsz {probe.lab.effective.yolo_imgsz}
             </Text>
+            <Text style={styles.configLine}>YOLO route: {probe.lab.effective.yolo_route || 'auto'}</Text>
             <Text style={styles.configLine}>Groq: {probe.lab.effective.groq_model}</Text>
             <Text style={styles.configLine}>
               Groq {probe.lab.effective.enable_groq ? 'on' : 'off'} · Gemini{' '}
@@ -412,6 +432,39 @@ function createAILabStyles(colors) {
     paddingVertical: 6,
     backgroundColor: 'rgba(102,210,177,0.15)',
     borderRadius: 8,
+  },
+  sectionHint: {
+    color: colors.grey,
+    fontSize: 12,
+    marginBottom: 8,
+    fontFamily: FONTS.en.regular,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  chipBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.borderMuted,
+    backgroundColor: colors.bgElevated,
+  },
+  chipBtnOn: {
+    borderColor: colors.teal,
+    backgroundColor: 'rgba(102,210,177,0.15)',
+  },
+  chipBtnText: {
+    color: colors.grey,
+    fontFamily: FONTS.en.semibold,
+    fontSize: 13,
+    textTransform: 'capitalize',
+  },
+  chipBtnTextOn: {
+    color: colors.tealBright,
   },
   configBox: {
     backgroundColor: colors.bgElevated,

@@ -1,6 +1,26 @@
 import { requireNativeModule } from 'expo';
 import { NativeModules, Platform } from 'react-native';
 
+function normalizeSpeechPkg(raw) {
+  const mod = raw?.ExpoSpeechRecognitionModule;
+  if (!mod?.start) {
+    return null;
+  }
+  const listener =
+    typeof raw?.addSpeechRecognitionListener === 'function'
+      ? raw.addSpeechRecognitionListener
+      : typeof mod.addListener === 'function'
+        ? mod.addListener.bind(mod)
+        : null;
+  if (typeof listener !== 'function') {
+    return null;
+  }
+  return {
+    ExpoSpeechRecognitionModule: mod,
+    addSpeechRecognitionListener: listener,
+  };
+}
+
 /**
  * Load speech recognition with fallbacks (Expo 49 + dev client).
  */
@@ -10,10 +30,13 @@ export function loadSpeechRecognitionPackage() {
   try {
     // eslint-disable-next-line global-require
     const pkg = require('expo-speech-recognition');
-    if (pkg?.ExpoSpeechRecognitionModule?.start) {
-      return { pkg, error: null };
+    const normalized = normalizeSpeechPkg(pkg);
+    if (normalized) {
+      return { pkg: normalized, error: null };
     }
-    lastError = new Error('Package loaded but ExpoSpeechRecognitionModule.start is missing');
+    lastError = new Error(
+      'Package loaded but speech listeners are missing (rebuild native app)',
+    );
   } catch (e) {
     lastError = e;
   }
@@ -21,28 +44,18 @@ export function loadSpeechRecognitionPackage() {
   if (Platform.OS !== 'web') {
     try {
       const mod = requireNativeModule('ExpoSpeechRecognition');
-      if (mod?.start) {
-        return {
-          pkg: {
-            ExpoSpeechRecognitionModule: mod,
-            addSpeechRecognitionListener: mod.addListener?.bind(mod),
-          },
-          error: null,
-        };
+      const normalized = normalizeSpeechPkg({ ExpoSpeechRecognitionModule: mod });
+      if (normalized) {
+        return { pkg: normalized, error: null };
       }
     } catch (e) {
       lastError = e;
     }
 
     const legacy = NativeModules?.ExpoSpeechRecognition;
-    if (legacy?.start) {
-      return {
-        pkg: {
-          ExpoSpeechRecognitionModule: legacy,
-          addSpeechRecognitionListener: legacy.addListener?.bind(legacy),
-        },
-        error: null,
-      };
+    const normalized = normalizeSpeechPkg({ ExpoSpeechRecognitionModule: legacy });
+    if (normalized) {
+      return { pkg: normalized, error: null };
     }
   }
 

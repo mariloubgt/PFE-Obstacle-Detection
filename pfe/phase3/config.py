@@ -43,7 +43,7 @@ YOLO_WEIGHTS_INDOOR = _pick_weights(
 )
 YOLO_CONF    = 0.40
 YOLO_IOU     = 0.45
-IMG_SIZE     = 832 
+IMG_SIZE     = int(os.getenv("YOLO_IMGSZ", "640")) 
 
 # --- CAMERA CALIBRATION ---
 FOCAL_CONSTANT = 1150  # legacy constant (depth now uses FOV below)
