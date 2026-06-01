@@ -20,8 +20,11 @@ export function pickSceneDescriptionText(data) {
   return { text, shouldSpeak, groqText, yoloFallback };
 }
 
+const CAPTURE_OPTS = { quality: 0.28, skipProcessing: true };
+const CAPTURE_WARMUP_MS = 650;
+
 /**
- * Capture one frame and run Groq describe (YOLO fallback). Stays on current screen.
+ * Wait for expo-camera preview after mic / navigation / audio session changes.
  * @param {React.RefObject} cameraRef
  */
 async function ensureCameraReadyForCapture(cameraRef) {
@@ -30,35 +33,48 @@ async function ensureCameraReadyForCapture(cameraRef) {
   } catch {
     /* ignore */
   }
-  await new Promise((r) => setTimeout(r, 400));
+  await new Promise((r) => setTimeout(r, CAPTURE_WARMUP_MS));
 }
 
+async function tryCaptureOnce(cameraRef) {
+  if (!cameraRef?.current?.takePictureAsync) {
+    throw new Error('Camera is not ready.');
+  }
+  return cameraRef.current.takePictureAsync(CAPTURE_OPTS);
+}
+
+/**
+ * Capture one frame and run Groq describe (YOLO fallback). Stays on current screen.
+ * @param {React.RefObject} cameraRef
+ */
 export async function captureAndDescribeScene(cameraRef) {
   if (!cameraRef?.current) {
     return { ok: false, error: 'Camera is not ready.', text: null, shouldSpeak: false };
   }
 
-  await ensureCameraReadyForCapture(cameraRef);
-
-  let photo;
-  const captureOpts = { quality: 0.28, skipProcessing: true };
-  try {
-    photo = await cameraRef.current.takePictureAsync(captureOpts);
-  } catch (firstErr) {
+  let photo = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     await ensureCameraReadyForCapture(cameraRef);
     try {
-      photo = await cameraRef.current.takePictureAsync(captureOpts);
-    } catch (camErr) {
-      return {
-        ok: false,
-        error:
-          camErr instanceof Error
-            ? `Could not capture a frame: ${camErr.message}`
-            : 'Could not capture a camera frame.',
-        text: null,
-        shouldSpeak: false,
-      };
+      photo = await tryCaptureOnce(cameraRef);
+      if (photo?.uri) break;
+    } catch (err) {
+      lastErr = err;
+      if (__DEV__) console.warn('[captureAndDescribeScene] attempt failed', attempt + 1, err);
     }
+  }
+
+  if (!photo?.uri) {
+    return {
+      ok: false,
+      error:
+        lastErr instanceof Error
+          ? `Could not capture a frame: ${lastErr.message}`
+          : 'Could not capture a camera frame. Wait a moment and try again.',
+      text: null,
+      shouldSpeak: false,
+    };
   }
 
   const api = await loadInferenceApiUrl();

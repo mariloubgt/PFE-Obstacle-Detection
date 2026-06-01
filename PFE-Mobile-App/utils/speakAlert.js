@@ -2,8 +2,6 @@ import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { AppState, NativeModules, Platform } from 'react-native';
 
-import { alertOutputState, applyAlertVolumeToSystemOutput, applyMaxAlertVolumeForUrgent } from './systemOutputVolume';
-
 let audioModeReady = false;
 let audioPrepPromise = null;
 let appStateSub = null;
@@ -26,31 +24,6 @@ async function stopNativeUrgentSpeech() {
     await mod.stopUrgentSpeech();
   } catch {
     /* ignore */
-  }
-}
-
-async function speakUrgentNative(line, ttsOptions, opts = {}) {
-  const playBeeps = opts.playBeeps !== false;
-  const mod = speechAudioModule();
-  if (!mod?.speakUrgent) {
-    await speakLineNow(line, ttsOptions);
-    return;
-  }
-
-  setSpeaking(true);
-  if (typeof ttsOptions.onStart === 'function') ttsOptions.onStart();
-
-  try {
-    await applyMaxAlertVolumeForUrgent();
-    if (playBeeps && mod.playUrgentBeeps) {
-      await mod.playUrgentBeeps();
-    }
-    await mod.speakUrgent(line, ttsOptions.rate ?? 0.95, ttsOptions.pitch ?? 1.5);
-  } catch (err) {
-    if (__DEV__) console.warn('[speakUrgentNative]', err);
-    await speakLineNow(line, ttsOptions);
-  } finally {
-    setSpeaking(false);
   }
 }
 
@@ -216,16 +189,8 @@ async function runSpeechLoop(gen) {
     } = next.speechOptions;
 
     const parts = linesForItem({ line: next.line, speechOptions });
-    const urgent = speechOptions?.pitch > 1.1;
-    const useNativeUrgent =
-      urgent && Platform.OS === 'ios' && speechAudioModule()?.speakUrgent;
 
-    if (!useNativeUrgent) {
-      await prepareSpeechAudio(true);
-    }
-    if (urgent && Platform.OS !== 'web') {
-      await applyMaxAlertVolumeForUrgent();
-    }
+    await prepareSpeechAudio(true);
 
     let started = false;
     let lastStatus = 'done';
@@ -241,13 +206,9 @@ async function runSpeechLoop(gen) {
         started = true;
         onStart?.();
       }
-      if (useNativeUrgent) {
-        await speakUrgentNative(part, speechOptions, { playBeeps: i === 0 });
-      } else {
-        const result = await speakLineNow(part, speechOptions);
-        lastStatus = result?.status || 'done';
-        if (lastStatus === 'stopped' || lastStatus === 'error') break;
-      }
+      const result = await speakLineNow(part, speechOptions);
+      lastStatus = result?.status || 'done';
+      if (lastStatus === 'stopped' || lastStatus === 'error') break;
     }
 
     if (lastStatus === 'stopped') onStopped?.();

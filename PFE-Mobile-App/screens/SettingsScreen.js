@@ -389,7 +389,7 @@ export default function SettingsScreen({ navigation }) {
             styles={styles}
             colors={colors}
             title="Hands-free phrase"
-            subtitle="Scene chat only — say describe, stop to go back, or activate navigation for obstacles"
+            subtitle="Main + Scene chat — detection, describe, scene chat. Stop detection: say stop or double-tap."
             value={handsFreePhrase}
             onValueChange={async (b) => setHandsFreePhrase(await saveHandsFreeDescribe(b))}
             last

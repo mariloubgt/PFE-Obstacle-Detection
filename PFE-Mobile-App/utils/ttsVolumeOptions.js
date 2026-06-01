@@ -11,17 +11,12 @@ export function clampAlertVolume01(v) {
 }
 
 /**
- * Map alert slider → expo-speech volume. Keeps alerts loud even below 100%.
+ * Map alert slider → expo-speech volume.
  * @param {number} [alertVolume01]
- * @param {{ urgent?: boolean }} [opts]
  */
-export function ttsVolumeOptions(alertVolume01, opts = {}) {
+export function ttsVolumeOptions(alertVolume01) {
   if (Platform.OS === 'web') return {};
-  if (opts.urgent) {
-    return { volume: 1 };
-  }
   const v = clampAlertVolume01(alertVolume01);
-  // Floor 0.88 so alerts stay audible; slider still scales up to 1.0.
   const speechVol = 0.88 + v * 0.12;
   return { volume: Math.min(1, speechVol) };
 }

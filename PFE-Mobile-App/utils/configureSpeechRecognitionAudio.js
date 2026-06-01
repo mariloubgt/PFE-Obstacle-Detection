@@ -11,7 +11,6 @@ export function configureSpeechRecognitionAudioIOS(module) {
       categoryOptions: ['defaultToSpeaker', 'allowBluetooth'],
       mode: 'spokenAudio',
     });
-    module.setAudioSessionActiveIOS?.(true, { notifyOthersOnDeactivation: true });
   } catch {
     /* ignore */
   }

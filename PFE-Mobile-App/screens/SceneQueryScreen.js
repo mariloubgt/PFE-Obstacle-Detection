@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
@@ -40,6 +40,7 @@ function formatTime(d = new Date()) {
 }
 
 export default function SceneQueryScreen({ navigation, route }) {
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
   const styles = useMemo(() => createSceneQueryStyles(colors), [colors]);
@@ -198,7 +199,7 @@ export default function SceneQueryScreen({ navigation, route }) {
       });
       if (route.params?.autoDescribe) {
         navigation.setParams({ autoDescribe: undefined });
-        setTimeout(() => void runGroqDescribeRef.current(), 400);
+        setTimeout(() => void runGroqDescribeRef.current(), 900);
       }
     }, [refreshCamPermission, route.params?.autoDescribe, navigation])
   );
@@ -227,7 +228,7 @@ export default function SceneQueryScreen({ navigation, route }) {
   }, [navigation]);
 
   useDescribeEnvironmentHotword({
-    enabled: voiceEnabled,
+    enabled: voiceEnabled && isFocused,
     autoListen: voiceEnabled,
     cameraRef,
     alertVolumeRef,
@@ -294,7 +295,7 @@ export default function SceneQueryScreen({ navigation, route }) {
       </View>
 
       <View style={styles.cameraContainer}>
-        {camPermission?.granted ? (
+        {isFocused && camPermission?.granted ? (
           <CameraComponent
             ref={cameraRef}
             style={styles.cameraPreview}

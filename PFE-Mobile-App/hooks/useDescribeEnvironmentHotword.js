@@ -14,11 +14,17 @@ import {
 } from '../utils/speechRecognitionPermissions';
 import { getSpeechRecognitionNativeStatus } from '../utils/speechRecognitionNativeStatus';
 import {
+  abortSpeechRecognition,
+  releaseSpeechRecognition,
+  takeSpeechRecognition,
+} from '../utils/speechRecognitionSession';
+import {
   isSpeechActive,
-  prepareSpeechAudio,
   stopSpeech,
   subscribeSpeechActive,
 } from '../utils/speakAlert';
+
+const OWNER_ID = 'scene-query';
 
 const PHRASE_COOLDOWN_MS = 3200;
 const STOP_COOLDOWN_MS = 800;
@@ -247,7 +253,6 @@ export function useDescribeEnvironmentHotword({
 
     const restorePlaybackAfterListen = () => {
       void ensureIosLoudSpeakerRoute();
-      void prepareSpeechAudio(true);
     };
 
     const stopSession = ({ resumePreview = true } = {}) => {
@@ -256,15 +261,7 @@ export function useDescribeEnvironmentHotword({
       setListening(false);
       if (!cancelled && enabled && isFocused) setVoiceStatus(autoListen ? 'ready' : 'ready');
       if (resumePreview) resumePreviewSafely();
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {
-        try {
-          ExpoSpeechRecognitionModule.stop();
-        } catch {
-          /* ignore */
-        }
-      }
+      abortSpeechRecognition(ExpoSpeechRecognitionModule, OWNER_ID);
       restorePlaybackAfterListen();
     };
 
@@ -329,6 +326,7 @@ export function useDescribeEnvironmentHotword({
         return;
       }
 
+      takeSpeechRecognition(ExpoSpeechRecognitionModule, OWNER_ID);
       sessionActive = true;
       setListening(true);
       setVoiceStatus('listening');
@@ -479,6 +477,7 @@ export function useDescribeEnvironmentHotword({
       requestListenRef.current = () => {};
       clearRestartTimer();
       stopSession();
+      releaseSpeechRecognition(OWNER_ID);
       setVoiceStatus('off');
       timers.forEach(clearTimeout);
       subs.forEach((s) => {

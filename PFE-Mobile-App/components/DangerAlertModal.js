@@ -55,7 +55,7 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
       }
       speakAlert(alertMessage, {
-        ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current, { urgent: true }),
+        ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current),
         interrupt: true,
       });
     });
@@ -69,7 +69,7 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
     speakAlert(alertMessage, {
-      ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current, { urgent: true }),
+      ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current),
       interrupt: true,
     });
   }, [alertMessage]);
