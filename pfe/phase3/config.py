@@ -41,8 +41,8 @@ YOLO_WEIGHTS_INDOOR = _pick_weights(
         _PROJECT_ROOT / "models" / "best indoor.pt",
     ),
 )
-YOLO_CONF    = 0.40
-YOLO_IOU     = 0.45
+YOLO_CONF    = float(os.getenv("YOLO_CONF", "0.40"))
+YOLO_IOU     = float(os.getenv("YOLO_IOU", "0.45"))
 IMG_SIZE     = int(os.getenv("YOLO_IMGSZ", "640")) 
 
 # --- CAMERA CALIBRATION ---
@@ -70,6 +70,9 @@ _OBJECT_REAL_HEIGHTS_BASE = {
     "bench": 80, "dog": 50, "motorcycle": 110, "bicycle": 100, "stairs": 150,
     "curb": 15, "fire_hydrant": 60, "waste_container": 100, "bus_stop": 250,
     "spherical_roadblock": 50, "warning_column": 100, "crutch": 120, "train": 400,
+    # Indoor custom classes (data_indoor_balanced.yaml)
+    "exit": 210, "fireextinguisher": 120, "fire_extinguisher": 120,
+    "printer": 95, "screen": 120, "trashbin": 85, "clock": 30,
 }
 
 _COCO_EXTRA_HEIGHTS_CM = {

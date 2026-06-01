@@ -46,6 +46,8 @@ import {
   saveVolumeHardwareAction,
   loadHandsFreeDescribe,
   saveHandsFreeDescribe,
+  loadYoloProfile,
+  saveYoloProfile,
 } from '../utils/appSettings';
 
 const SPEECH_OPTIONS = [
@@ -54,11 +56,19 @@ const SPEECH_OPTIONS = [
   { label: 'Fast', value: 0.85 },
 ];
 
+const YOLO_PROFILE_OPTIONS = [
+  { value: 'auto', label: 'Auto (indoor + outdoor)' },
+  { value: 'indoor', label: 'Indoor only (chairs, faster)' },
+  { value: 'outdoor', label: 'Outdoor only (street)' },
+];
+
 const FRAME_PRESETS = [
-  { label: '0.5 fps', ms: 2000 },
-  { label: '1 fps', ms: 1000 },
-  { label: '1.5 fps', ms: 666 },
+  { label: '3 fps (fastest)', ms: 333 },
+  { label: '2.5 fps (recommended)', ms: 400 },
   { label: '2 fps', ms: 500 },
+  { label: '1.5 fps', ms: 666 },
+  { label: '1 fps', ms: 1000 },
+  { label: '0.5 fps', ms: 2000 },
   { label: '0.33 fps', ms: 3000 },
 ];
 
@@ -88,7 +98,7 @@ function snapSpeechLabel(rate) {
 }
 
 function snapFrameMs(ms) {
-  let best = FRAME_PRESETS[1].ms;
+  let best = FRAME_PRESETS[0].ms;
   let d = 1e9;
   for (const p of FRAME_PRESETS) {
     const c = Math.abs(p.ms - ms);
@@ -173,6 +183,8 @@ export default function SettingsScreen({ navigation }) {
   const [speechOpen, setSpeechOpen] = useState(false);
   const [frameMs, setFrameMs] = useState(1000);
   const [frameOpen, setFrameOpen] = useState(false);
+  const [yoloProfile, setYoloProfile] = useState('auto');
+  const [yoloProfileOpen, setYoloProfileOpen] = useState(false);
   const [vib, setVib] = useState(true);
   const [lowLight, setLowLight] = useState(true);
   const [gem, setGem] = useState(false);
@@ -196,6 +208,7 @@ export default function SettingsScreen({ navigation }) {
     setVib(await loadVibrationDanger());
     setThr(await loadDangerThresholdM());
     setFrameMs(snapFrameMs(await loadAiFrameMs()));
+    setYoloProfile(await loadYoloProfile());
     setLowLight(await loadLowLight());
     setGem(await loadInternetGemini());
     setHfovDeg(await loadCameraHfovDeg());
@@ -320,6 +333,16 @@ export default function SettingsScreen({ navigation }) {
             subtitle="YOLO processing speed"
             value={formatFrameValue(frameMs)}
             onPress={() => setFrameOpen(true)}
+          />
+          <InsetDivider styles={styles} />
+          <ValueRow
+            styles={styles}
+            title="Detection mode"
+            subtitle="Indoor only = chairs, no false person"
+            value={
+              YOLO_PROFILE_OPTIONS.find((o) => o.value === yoloProfile)?.label || 'Auto'
+            }
+            onPress={() => setYoloProfileOpen(true)}
           />
           <InsetDivider styles={styles} />
           <ToggleRow
@@ -647,6 +670,45 @@ export default function SettingsScreen({ navigation }) {
                   {o.label}
                 </Text>
                 {o.value === volumeHw ? (
+                  <MaterialCommunityIcons name="check" size={22} color={colors.teal} />
+                ) : null}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={yoloProfileOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setYoloProfileOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setYoloProfileOpen(false)}>
+          <View style={styles.pickerCard}>
+            <Text style={styles.modalTitle}>Detection mode</Text>
+            <Text style={styles.modalHint}>
+              Use Indoor only inside buildings (chairs, exits). Auto uses both models.
+            </Text>
+            {YOLO_PROFILE_OPTIONS.map((o) => (
+              <Pressable
+                key={o.value}
+                style={({ pressed }) => [styles.pickerRow, pressed && styles.pressed]}
+                onPress={async () => {
+                  const v = await saveYoloProfile(o.value);
+                  setYoloProfile(v);
+                  setYoloProfileOpen(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.pickerLabel,
+                    o.value === yoloProfile && styles.pickerLabelOn,
+                  ]}
+                >
+                  {o.label}
+                </Text>
+                {o.value === yoloProfile ? (
                   <MaterialCommunityIcons name="check" size={22} color={colors.teal} />
                 ) : null}
               </Pressable>

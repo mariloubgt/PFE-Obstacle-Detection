@@ -4,6 +4,7 @@ import {
   VIBRATION_DANGER_KEY,
   DANGER_THRESHOLD_M_KEY,
   AI_FRAME_MS_KEY,
+  YOLO_PROFILE_KEY,
   LOW_LIGHT_KEY,
   PRIMARY_LANG_KEY,
   INTERNET_GEMINI_KEY,
@@ -19,7 +20,9 @@ export const DEFAULTS = {
   speechRate: 0.95,
   vibrationDanger: true,
   dangerThresholdM: 0.8,
-  aiFrameMs: 1500,
+  aiFrameMs: 450,
+  /** @type {'auto'|'indoor'|'outdoor'} */
+  yoloProfile: 'auto',
   lowLight: true,
   primaryLang: 'en',
   internetGemini: false,
@@ -54,7 +57,7 @@ function parseIntMs(v, d) {
   if (v == null) return d;
   const n = parseInt(String(v), 10);
   if (Number.isNaN(n)) return d;
-  return Math.min(10000, Math.max(250, n));
+  return Math.min(10000, Math.max(300, n));
 }
 
 export async function loadSpeechRate() {
@@ -283,6 +286,28 @@ export async function loadHandsFreeDescribe() {
   }
 }
 
+export async function loadYoloProfile() {
+  try {
+    const v = await AsyncStorage.getItem(YOLO_PROFILE_KEY);
+    const s = (v || DEFAULTS.yoloProfile).toLowerCase();
+    if (s === 'indoor' || s === 'outdoor') return s;
+    return 'auto';
+  } catch {
+    return DEFAULTS.yoloProfile;
+  }
+}
+
+export async function saveYoloProfile(profile) {
+  const s = String(profile || 'auto').toLowerCase();
+  const x = s === 'indoor' || s === 'outdoor' ? s : 'auto';
+  try {
+    await AsyncStorage.setItem(YOLO_PROFILE_KEY, x);
+  } catch {
+    /* ignore */
+  }
+  return x;
+}
+
 export async function saveHandsFreeDescribe(b) {
   const x = Boolean(b);
   try {
@@ -307,6 +332,7 @@ export async function loadAppPreferences() {
     depthScale,
     volumeHardwareAction,
     handsFreeDescribe,
+    yoloProfile,
   ] = await Promise.all([
     loadSpeechRate(),
     loadVibrationDanger(),
@@ -319,6 +345,7 @@ export async function loadAppPreferences() {
     loadDepthScale(),
     loadVolumeHardwareAction(),
     loadHandsFreeDescribe(),
+    loadYoloProfile(),
   ]);
   return {
     speechRate,
@@ -332,5 +359,6 @@ export async function loadAppPreferences() {
     depthScale,
     volumeHardwareAction,
     handsFreeDescribe,
+    yoloProfile,
   };
 }

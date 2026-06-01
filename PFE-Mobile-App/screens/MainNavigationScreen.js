@@ -21,7 +21,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // Local Components & Utils
 import DangerAlertModal from '../components/DangerAlertModal';
 import DetectionOverlay from '../components/DetectionOverlay';
-import { predictNavigationFrame } from '../services/predict';
+import {
+  predictNavigationYolo,
+  predictNavigationGroq,
+} from '../services/predict';
 import { useThemeColors } from '../contexts/ThemeContext';
 import { FONTS } from '../constants/typography';
 import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
@@ -31,6 +34,12 @@ import { buildTtsOptions } from '../utils/buildTtsOptions';
 import { speakAlert, prepareSpeechAudio, isSpeechActive } from '../utils/speakAlert';
 import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
 import { pickCloseThreat } from '../utils/evaluateCloseThreat';
+import {
+  rankNavDetections,
+  pickNavPrimary,
+  confirmPersonThreat,
+  normNavClass,
+} from '../utils/navDetectionRanking';
 import { isSimulatorDevice } from '../utils/isSimulator';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
 import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
@@ -65,6 +74,13 @@ const ENGLISH_SPEECH_LABEL = {
   spherical_roadblock: 'a roadblock',
   warning_column: 'a warning column',
   train: 'a train',
+  exit: 'an exit',
+  fireextinguisher: 'a fire extinguisher',
+  fire_extinguisher: 'a fire extinguisher',
+  printer: 'a printer',
+  screen: 'a screen',
+  trashbin: 'a trash bin',
+  clock: 'a clock',
 };
 
 function englishLabelForClass(name) {
@@ -78,50 +94,28 @@ function normClass(name) {
   return String(name || '').toLowerCase().trim();
 }
 
-/**
- * Stay on one "primary" obstacle until it disappears or another is clearly closer (less jitter).
- * @param {Array} sortedDetections sorted by distance_m ascending
- * @param {{ current: { key: string } | null }} lockRef
- */
-function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.55) {
-  if (!sortedDetections.length) {
-    lockRef.current = null;
-    return null;
-  }
-  const cand = sortedDetections[0];
-  const lock = lockRef.current;
-  if (!lock) {
-    lockRef.current = { key: normClass(cand.name) };
-    return cand;
-  }
-  const lockedDet = sortedDetections.find((d) => normClass(d.name) === lock.key);
-  if (!lockedDet) {
-    lockRef.current = { key: normClass(cand.name) };
-    return cand;
-  }
-  if (normClass(cand.name) === lock.key) {
-    return cand;
-  }
-  const cd = cand.distance_m ?? 99;
-  const ld = lockedDet.distance_m ?? 99;
-  if (cd < ld - hysteresisM) {
-    lockRef.current = { key: normClass(cand.name) };
-    return cand;
-  }
-  return lockedDet;
-}
-
-const SPEAK_MIN_GAP_MS = 4500;
-/** Ignore weak or distance-less YOLO hits (avoids false "exit/car" speech). */
+const SPEAK_MIN_GAP_MS = 1200;
 const NAV_MIN_CONF = 0.35;
+const NAV_PERSON_MIN_CONF = 0.55;
+const NAV_SPEAK_MAX_M = 6.0;
+const NAV_VALID_MAX_M = 8.0;
 
 function isValidNavDetection(d) {
   const dist = d?.distance_m;
   if (typeof dist !== 'number' || !Number.isFinite(dist)) return false;
-  if (dist <= 0.12 || dist >= 5.0) return false;
-  const conf = d?.confidence;
-  if (typeof conf === 'number' && conf < NAV_MIN_CONF) return false;
+  if (dist <= 0.12 || dist >= NAV_VALID_MAX_M) return false;
+  const conf = d?.confidence ?? 0;
+  const cls = normNavClass(d.name);
+  if (cls === 'person' && conf < NAV_PERSON_MIN_CONF) return false;
+  if (cls !== 'person' && conf < NAV_MIN_CONF) return false;
+  const w = (d.x2 || 0) - (d.x1 || 0);
+  const h = (d.y2 || 0) - (d.y1 || 0);
+  if (w * h < 0.002 && conf < 0.45) return false;
   return true;
+}
+
+function sortByDistance(list) {
+  return [...list].sort((a, b) => (a.distance_m ?? 99) - (b.distance_m ?? 99));
 }
 
 function formatMeters(m) {
@@ -185,12 +179,17 @@ export default function MainNavigationScreen({ navigation, route }) {
   const aiTestRef = useRef(false);
   const lastEmergencyAtRef = useRef(0);
   const smoothStateRef = useRef({});
+  const personThreatRef = useRef(null);
   const lastTtsKeyRef = useRef('');
   const lastSpeakAtRef = useRef(0);
   const hadObstacleRef = useRef(false);
   /** Lock TTS + overlay on one obstacle until another is clearly closer */
   const primaryLockRef = useRef(null);
   const lastPipelineMsRef = useRef(1500);
+  const apiUrlRef = useRef(null);
+  const groqInFlightRef = useRef(false);
+  const groqSeqRef = useRef(0);
+  const latestPrimaryRef = useRef([]);
   const manualSuppressRef = useRef(false);
   const alertVolumeRef = useRef(alertVolume);
   const [aiFrameMs, setAiFrameMs] = useState(DEFAULTS.aiFrameMs);
@@ -300,9 +299,16 @@ export default function MainNavigationScreen({ navigation, route }) {
     const obKey = `${d0.name}|${dist}`;
 
     const now = Date.now();
-    if (obKey === lastTtsKeyRef.current && now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS) {
+    const prevClass = (lastTtsKeyRef.current || '').split('|')[0];
+    const classChanged = prevClass && prevClass !== String(d0.name);
+    if (
+      !classChanged &&
+      obKey === lastTtsKeyRef.current &&
+      now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS
+    ) {
       return;
     }
+    if ((d0.distance_m ?? 99) > NAV_SPEAK_MAX_M) return;
 
     const label = englishLabelForClass(d0.name);
     const cx = ((d0.x1 ?? 0) + (d0.x2 ?? 1)) / 2;
@@ -316,14 +322,43 @@ export default function MainNavigationScreen({ navigation, route }) {
     speakAlert(msg, { ...ttsOptsUrgent(), interrupt: true });
   }, [ttsOptsUrgent]);
 
-  /** Groq speaks first; YOLO emergency/fallback only when Groq has no guidance. */
-  const speakNavigationVoice = useCallback((groq, primaryOnly) => {
+  /**
+   * Groq + YOLO: instant YOLO stop when very close; Groq guidance for richer detection;
+   * YOLO speech if Groq unavailable.
+   */
+  const speakNavigationVoice = useCallback((groq, primaryOnly, opts = {}) => {
+    const yoloOnly = opts.yoloOnly === true;
     const guidance =
       typeof groq?.guidance_en === 'string' ? groq.guidance_en.trim() : '';
     const risk = typeof groq?.risk === 'string' ? groq.risk.toLowerCase() : 'ok';
     const hasValidYolo = primaryOnly.some(isValidNavDetection);
     const now = Date.now();
     const urgent = risk === 'danger' || risk === 'caution';
+    const threshold = prefsRef.current.dangerThresholdM ?? DEFAULTS.dangerThresholdM;
+    const closest = primaryOnly[0];
+
+    if (
+      closest &&
+      isValidNavDetection(closest) &&
+      (closest.distance_m ?? 99) < threshold &&
+      now - lastEmergencyAtRef.current >= 3000
+    ) {
+      lastEmergencyAtRef.current = now;
+      const distR = Math.max(0.2, Math.round((closest.distance_m || 0) * 10) / 10);
+      const label = englishLabelForClass(closest.name);
+      const cx = ((closest.x1 ?? 0) + (closest.x2 ?? 1)) / 2;
+      const side =
+        cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
+      const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${distR} meters ${side}.`;
+      lastTtsKeyRef.current = `stop|${closest.name}|${distR}`;
+      lastSpeakAtRef.current = now;
+      speakAlert(msg, { ...ttsOptsUrgent(), pitch: 1.05, interrupt: true });
+      return;
+    }
+
+    if (yoloOnly) {
+      return;
+    }
 
     if (guidance) {
       if (
@@ -336,7 +371,7 @@ export default function MainNavigationScreen({ navigation, route }) {
         return;
       }
 
-      const groqKey = `${risk}|${guidance.slice(0, 100)}`;
+      const groqKey = `${risk}|${guidance.slice(0, 120)}`;
       if (
         groqKey === lastTtsKeyRef.current &&
         now - lastSpeakAtRef.current < SPEAK_MIN_GAP_MS
@@ -358,24 +393,9 @@ export default function MainNavigationScreen({ navigation, route }) {
       return;
     }
 
-    const threshold = prefsRef.current.dangerThresholdM ?? DEFAULTS.dangerThresholdM;
-    const closest = primaryOnly[0];
-    if (
-      closest &&
-      isValidNavDetection(closest) &&
-      closest.distance_m < threshold &&
-      now - lastEmergencyAtRef.current >= 6000
-    ) {
-      lastEmergencyAtRef.current = now;
-      const dist = Math.max(0.2, Math.round(closest.distance_m * 10) / 10);
-      const label = englishLabelForClass(closest.name);
-      const cx = ((closest.x1 ?? 0) + (closest.x2 ?? 1)) / 2;
-      const side =
-        cx < 1 / 3 ? 'on your left' : cx < 2 / 3 ? 'directly ahead' : 'on your right';
-      const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
-      lastTtsKeyRef.current = `stop|${closest.name}|${dist}`;
-      lastSpeakAtRef.current = now;
-      speakAlert(msg, { ...ttsOptsUrgent(), interrupt: true });
+    if (!primaryOnly.length) {
+      hadObstacleRef.current = false;
+      lastTtsKeyRef.current = '';
       return;
     }
 
@@ -412,26 +432,34 @@ export default function MainNavigationScreen({ navigation, route }) {
       return;
     inFlightRef.current = true;
     try {
-      const api = await loadInferenceApiUrl();
+      let api = apiUrlRef.current;
+      if (!api) {
+        api = await loadInferenceApiUrl();
+        apiUrlRef.current = api;
+      }
       if (!api) return;
       const prefs = prefsRef.current;
       const photo = await cameraRef.current.takePictureAsync({
-        quality: prefs.lowLight ? 0.28 : 0.15,
+        quality: prefs.lowLight ? 0.4 : 0.35,
         skipProcessing: true,
       });
       const po = predictOptsRef.current;
-      const data = await predictNavigationFrame(api, photo.uri, {
+      const navOpts = {
         hfovDeg: po.hfovDeg,
         depthScale: po.depthScale,
-      });
+        yoloProfile: prefs.yoloProfile || 'auto',
+      };
+
+      const data = await predictNavigationYolo(api, photo.uri, navOpts);
 
       const valid = (data.detections || []).filter(isValidNavDetection);
+      const instantRanked = rankNavDetections(sortByDistance(valid), isValidNavDetection);
       const smoothed = smoothDetectionDistances(valid, smoothStateRef);
-      const sorted = [...smoothed].sort(
-        (a, b) => (a.distance_m ?? 99) - (b.distance_m ?? 99)
-      );
-      const primary = pickLockedPrimary(sorted, primaryLockRef);
+      const smoothedRanked = rankNavDetections(sortByDistance(smoothed), isValidNavDetection);
+      const primary = pickNavPrimary(smoothedRanked, primaryLockRef);
       const primaryOnly = primary ? [primary] : [];
+      latestPrimaryRef.current = primaryOnly;
+      const sorted = smoothedRanked;
       const overlayDets = sorted.slice(0, 4);
       const outdoorN = sorted.filter((d) => d.model === 'outdoor').length;
       const indoorN = sorted.filter((d) => d.model === 'indoor').length;
@@ -447,9 +475,7 @@ export default function MainNavigationScreen({ navigation, route }) {
       setInferenceMs(data.inference_ms ?? null);
       setPipelineMs(data.pipeline_ms ?? null);
       setGroqMs(data.groq?.ms ?? null);
-      if (data.pipeline_ms) {
-        lastPipelineMsRef.current = data.pipeline_ms;
-      }
+      lastPipelineMsRef.current = data.inference_ms || 450;
       const ctx =
         (typeof data.groq?.guidance_en === 'string' && data.groq.guidance_en.trim()) ||
         (typeof data.groq?.scene === 'string' && data.groq.scene.trim()) ||
@@ -459,7 +485,26 @@ export default function MainNavigationScreen({ navigation, route }) {
 
       const threshold = prefs.dangerThresholdM ?? DEFAULTS.dangerThresholdM;
       if (!manualSuppressRef.current) {
-        const threat = pickCloseThreat(smoothed, { dangerWithinMeters: threshold });
+        let rawThreat = pickCloseThreat(instantRanked, { dangerWithinMeters: threshold });
+        rawThreat = confirmPersonThreat(rawThreat, personThreatRef);
+        const groqRisk = (data.groq?.risk || '').toLowerCase();
+        const groqGuide =
+          typeof data.groq?.guidance_en === 'string' ? data.groq.guidance_en.trim() : '';
+        if (
+          !rawThreat &&
+          groqRisk === 'danger' &&
+          groqGuide &&
+          !data.groq?.error?.includes('Cached')
+        ) {
+          rawThreat = {
+            id: `groq-${Date.now()}`,
+            displayLabel: 'OBSTACLE',
+            distanceM: threshold,
+            alertMessage: groqGuide,
+            className: data.groq?.focus || 'obstacle',
+          };
+        }
+        const threat = rawThreat;
         if (threat) {
           setDangerPayload(threat);
           if (prefs.vibrationDanger && Platform.OS !== 'web') {
@@ -480,7 +525,59 @@ export default function MainNavigationScreen({ navigation, route }) {
         }
       }
 
-      speakNavigationVoice(data.groq, primaryOnly);
+      speakNavigationVoice(null, primaryOnly, { yoloOnly: true });
+
+      if (po.useGroq !== false) {
+        const seq = groqSeqRef.current + 1;
+        groqSeqRef.current = seq;
+        void (async () => {
+          groqInFlightRef.current = true;
+          try {
+            const groqData = await predictNavigationGroq(
+              api,
+              photo.uri,
+              data.detections,
+              navOpts
+            );
+            if (!aiTestRef.current || seq !== groqSeqRef.current) return;
+            setGroqMs(groqData.groq?.ms ?? null);
+            const gCtx =
+              (typeof groqData.groq?.guidance_en === 'string' &&
+                groqData.groq.guidance_en.trim()) ||
+              (typeof groqData.groq?.scene === 'string' && groqData.groq.scene.trim()) ||
+              null;
+            if (gCtx) setVoiceContextHint(gCtx);
+
+            const groqRisk = (groqData.groq?.risk || '').toLowerCase();
+            const groqGuide =
+              typeof groqData.groq?.guidance_en === 'string'
+                ? groqData.groq.guidance_en.trim()
+                : '';
+            if (
+              !manualSuppressRef.current &&
+              groqRisk === 'danger' &&
+              groqGuide &&
+              !groqData.groq?.error?.includes('Cached')
+            ) {
+              setDangerPayload({
+                id: `groq-${Date.now()}`,
+                displayLabel: 'OBSTACLE',
+                distanceM: threshold,
+                alertMessage: groqGuide,
+                className: groqData.groq?.focus || 'obstacle',
+              });
+            }
+
+            speakNavigationVoice(groqData.groq, latestPrimaryRef.current);
+          } catch {
+            speakNavigationVoice(null, latestPrimaryRef.current);
+          } finally {
+            groqInFlightRef.current = false;
+          }
+        })();
+      } else {
+        speakNavigationVoice(null, primaryOnly);
+      }
     } catch (e) {
       if (aiTestRef.current) setInferenceError(e.message);
     } finally {
@@ -505,16 +602,21 @@ export default function MainNavigationScreen({ navigation, route }) {
       await runFrame();
       if (cancelled || !aiTestRef.current) return;
       const elapsed = Date.now() - t0;
-      const targetGap = Math.max(
-        aiFrameMs,
-        Math.round(lastPipelineMsRef.current * 1.05)
-      );
-      const wait = Math.max(300, targetGap - elapsed);
+      const inferMs = lastPipelineMsRef.current
+        ? Math.min(lastPipelineMsRef.current, 2500)
+        : aiFrameMs;
+      const targetGap = Math.max(aiFrameMs, Math.round(inferMs + 100));
+      const wait = Math.max(120, targetGap - elapsed);
       scheduleNext(wait);
     };
 
     if (aiTestEnabled) {
+      void loadInferenceApiUrl().then((u) => {
+        apiUrlRef.current = u;
+      });
       smoothStateRef.current = {};
+      personThreatRef.current = null;
+      groqSeqRef.current = 0;
       lastTtsKeyRef.current = '';
       hadObstacleRef.current = false;
       primaryLockRef.current = null;
@@ -524,6 +626,7 @@ export default function MainNavigationScreen({ navigation, route }) {
       Speech.stop();
       lastTtsKeyRef.current = '';
       smoothStateRef.current = {};
+      personThreatRef.current = null;
       setDetections([]);
       setDetectionSummary({ outdoor: 0, indoor: 0, route: 'fast' });
       setInferenceMs(null);

@@ -4,6 +4,8 @@ export const SPEECH_RATE_KEY = '@visionaid_speech_rate';
 export const VIBRATION_DANGER_KEY = '@visionaid_vibration_danger';
 export const DANGER_THRESHOLD_M_KEY = '@visionaid_danger_threshold_m';
 export const AI_FRAME_MS_KEY = '@visionaid_ai_frame_ms';
+/** auto | indoor | outdoor — which YOLO head(s) the server runs per frame */
+export const YOLO_PROFILE_KEY = '@visionaid_yolo_profile';
 export const LOW_LIGHT_KEY = '@visionaid_low_light';
 export const PRIMARY_LANG_KEY = '@visionaid_primary_lang';
 export const INTERNET_GEMINI_KEY = '@visionaid_internet_gemini';

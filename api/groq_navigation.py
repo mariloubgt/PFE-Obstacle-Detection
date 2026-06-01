@@ -32,9 +32,11 @@ DEFAULT_MODEL = os.environ.get(
 ).strip()
 DEFAULT_TIMEOUT_S = float(os.environ.get("GROQ_TIMEOUT_S", "4.0"))
 DEFAULT_MIN_INTERVAL_S = float(os.environ.get("GROQ_MIN_INTERVAL_S", "1.0"))
+DEFAULT_NAV_MIN_INTERVAL_S = float(os.environ.get("GROQ_NAV_MIN_INTERVAL_S", "0.75"))
 DEFAULT_MAX_TOKENS = int(os.environ.get("GROQ_MAX_TOKENS", "220"))
-DEFAULT_IMAGE_SIDE = int(os.environ.get("GROQ_IMAGE_MAX_SIDE", "640"))
-DEFAULT_JPEG_QUALITY = int(os.environ.get("GROQ_JPEG_QUALITY", "70"))
+DEFAULT_IMAGE_SIDE = int(os.environ.get("GROQ_IMAGE_MAX_SIDE", "512"))
+DEFAULT_NAV_IMAGE_SIDE = int(os.environ.get("GROQ_NAV_IMAGE_MAX_SIDE", "512"))
+DEFAULT_JPEG_QUALITY = int(os.environ.get("GROQ_JPEG_QUALITY", "65"))
 
 
 _state_lock = threading.Lock()
@@ -81,18 +83,25 @@ def _api_key() -> str | None:
     return key or None
 
 
-def _resize_for_api(pil_rgb: Image.Image) -> Image.Image:
+def _resize_for_api(pil_rgb: Image.Image, max_side: int | None = None) -> Image.Image:
+    cap = max_side if max_side is not None else DEFAULT_IMAGE_SIDE
     w, h = pil_rgb.size
     side = max(w, h)
-    if side <= DEFAULT_IMAGE_SIDE:
+    if side <= cap:
         return pil_rgb
-    scale = DEFAULT_IMAGE_SIDE / float(side)
+    scale = cap / float(side)
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return pil_rgb.resize(new_size, Image.LANCZOS)
 
 
-def _encode_image_data_url(pil_rgb: Image.Image) -> str:
-    img = _resize_for_api(pil_rgb.convert("RGB"))
+def prepare_image_data_url(pil_rgb: Image.Image, *, navigate: bool = False) -> str:
+    """Pre-encode JPEG for Groq (can run in parallel with YOLO)."""
+    cap = DEFAULT_NAV_IMAGE_SIDE if navigate else DEFAULT_IMAGE_SIDE
+    return _encode_image_data_url(pil_rgb, max_side=cap)
+
+
+def _encode_image_data_url(pil_rgb: Image.Image, max_side: int | None = None) -> str:
+    img = _resize_for_api(pil_rgb.convert("RGB"), max_side=max_side)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=DEFAULT_JPEG_QUALITY)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -293,6 +302,7 @@ def run_groq_navigation(
     pil_rgb: Image.Image,
     detections: list[dict[str, Any]],
     mode: str = "describe",
+    image_data_url: str | None = None,
 ) -> dict[str, Any]:
     """Call Groq + Llama 4 Scout. mode='describe' (default) or 'navigate'."""
     global _last_call_mono, _in_flight, _last_result
@@ -305,6 +315,13 @@ def run_groq_navigation(
         return _empty_result("Missing GROQ_API_KEY.")
 
     is_nav = str(mode).strip().lower() == "navigate"
+    min_interval = DEFAULT_NAV_MIN_INTERVAL_S if is_nav else DEFAULT_MIN_INTERVAL_S
+    try:
+        from api.runtime_lab import get_groq_min_interval
+
+        min_interval = get_groq_min_interval(min_interval)
+    except ImportError:
+        pass
 
     now = time.monotonic()
     with _state_lock:
@@ -316,7 +333,7 @@ def run_groq_navigation(
 
         if (
             _last_result is not None
-            and (now - _last_call_mono) < _min_interval_s()
+            and (now - _last_call_mono) < min_interval
             and _last_result.get("mode") == ("navigate" if is_nav else "describe")
         ):
             cached = dict(_last_result)
@@ -328,7 +345,11 @@ def run_groq_navigation(
 
     t0 = time.perf_counter()
     try:
-        data_url = _encode_image_data_url(pil_rgb)
+        if image_data_url:
+            data_url = image_data_url
+        else:
+            cap = DEFAULT_NAV_IMAGE_SIDE if is_nav else DEFAULT_IMAGE_SIDE
+            data_url = _encode_image_data_url(pil_rgb, max_side=cap)
         prompt = _build_navigation_prompt(detections) if is_nav else _build_prompt(detections)
         system_msg = _NAVIGATE_SYSTEM if is_nav else _DESCRIBE_SYSTEM
         payload = {

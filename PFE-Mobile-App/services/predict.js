@@ -35,6 +35,9 @@ function explainNetworkFailure(base, err) {
  *   detailed?: boolean,
  *   hfovDeg?: number,
  *   depthScale?: number,
+ *   yoloProfile?: 'auto' | 'indoor' | 'outdoor' | 'dual',
+ *   skipYolo?: boolean,
+ *   detectionsJson?: string,
  * }} [options]
  */
 export async function predictImage(apiBase, imageUri, options = {}) {
@@ -45,6 +48,9 @@ export async function predictImage(apiBase, imageUri, options = {}) {
     detailed = false,
     hfovDeg,
     depthScale,
+    yoloProfile = 'auto',
+    skipYolo = false,
+    detectionsJson,
   } = options;
   const base = (apiBase || '').replace(/\/$/, '');
   if (!base.startsWith('http')) {
@@ -67,6 +73,16 @@ export async function predictImage(apiBase, imageUri, options = {}) {
   }
   if (depthScale != null && Number.isFinite(Number(depthScale))) {
     form.append('depth_scale', String(Number(depthScale)));
+  }
+  const prof = String(yoloProfile || 'auto').toLowerCase();
+  if (['auto', 'indoor', 'outdoor', 'dual'].includes(prof)) {
+    form.append('yolo_profile', prof);
+  }
+  if (skipYolo) {
+    form.append('skip_yolo', 'true');
+    if (detectionsJson) {
+      form.append('detections_json', detectionsJson);
+    }
   }
 
   let res;
@@ -98,16 +114,46 @@ export async function predictImage(apiBase, imageUri, options = {}) {
   return data;
 }
 
-/**
- * Navigation: YOLO boxes + Groq navigate voice (Groq speaks; YOLO is fallback only).
- */
-export async function predictNavigationFrame(apiBase, imageUri, options = {}) {
+/** Fast path: YOLO only (boxes + danger), no Groq wait. */
+export async function predictNavigationYolo(apiBase, imageUri, options = {}) {
+  const { hfovDeg, depthScale, yoloProfile } = options;
+  return predictImage(apiBase, imageUri, {
+    hfovDeg,
+    depthScale,
+    yoloProfile: yoloProfile || 'auto',
+    useGemini: false,
+    useGroq: false,
+    groqMode: 'navigate',
+    detailed: false,
+  });
+}
+
+/** Groq guidance only (reuse detections from predictNavigationYolo). */
+export async function predictNavigationGroq(apiBase, imageUri, detections, options = {}) {
   const { hfovDeg, depthScale } = options;
   return predictImage(apiBase, imageUri, {
     hfovDeg,
     depthScale,
     useGemini: false,
     useGroq: true,
+    groqMode: 'navigate',
+    detailed: false,
+    skipYolo: true,
+    detectionsJson: JSON.stringify(detections || []),
+  });
+}
+
+/**
+ * Full navigation (YOLO + Groq in one request). Prefer staged YOLO + Groq in the app loop.
+ */
+export async function predictNavigationFrame(apiBase, imageUri, options = {}) {
+  const { hfovDeg, depthScale, yoloProfile, useGroq = true } = options;
+  return predictImage(apiBase, imageUri, {
+    hfovDeg,
+    depthScale,
+    yoloProfile: yoloProfile || 'auto',
+    useGemini: false,
+    useGroq: useGroq !== false,
     groqMode: 'navigate',
     detailed: false,
   });

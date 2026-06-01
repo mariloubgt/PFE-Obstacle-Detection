@@ -8,7 +8,7 @@ import { isSimulatorDevice } from './isSimulator';
 export const DEFAULT_LAB_PREDICT_OPTS = {
   useGroq: true,
   useGemini: false,
-  groqMode: 'describe',
+  groqMode: 'navigate',
   detailed: true,
 };
 

@@ -7,9 +7,12 @@
  * - Sortie : si la variation est < 3 cm vs l’affichage précédent, on garde la même valeur.
  */
 
-const MEDIAN_LEN = 7;
-const EMA_ALPHA = 0.16;
-const OUTPUT_DEADBAND_M = 0.05;
+const MEDIAN_LEN = 5;
+const MEDIAN_LEN_CLOSE = 3;
+const EMA_ALPHA = 0.22;
+const EMA_ALPHA_CLOSE = 0.42;
+const CLOSE_M = 2.2;
+const OUTPUT_DEADBAND_M = 0.03;
 
 function median(arr) {
   if (arr.length === 0) return null;
@@ -57,7 +60,8 @@ export function smoothDetectionDistances(detections, stateRef) {
 
     let hist = state.history[key];
     if (!hist) hist = [];
-    hist = [...hist.slice(-(MEDIAN_LEN - 1)), raw];
+    const histLen = raw < CLOSE_M ? MEDIAN_LEN_CLOSE : MEDIAN_LEN;
+    hist = [...hist.slice(-(histLen - 1)), raw];
     state.history[key] = hist;
 
     const med = median(hist);
@@ -68,7 +72,8 @@ export function smoothDetectionDistances(detections, stateRef) {
 
     let prev = state.ema[key];
     if (prev == null || !Number.isFinite(prev)) prev = med;
-    const ema = prev + EMA_ALPHA * (med - prev);
+    const alpha = raw < CLOSE_M ? EMA_ALPHA_CLOSE : EMA_ALPHA;
+    const ema = prev + alpha * (med - prev);
     state.ema[key] = ema;
     let rounded = Math.round(ema * 100) / 100;
 

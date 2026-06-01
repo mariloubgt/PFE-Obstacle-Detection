@@ -5,7 +5,8 @@
  */
 
 const DANGER_WITHIN_DEFAULT_M = 1.15;
-const MIN_CONFIDENCE = 0.32;
+const MIN_CONFIDENCE = 0.35;
+const PERSON_MIN_CONFIDENCE = 0.55;
 const MIN_BOX_AREA = 0.012;
 
 function estimateMetersFromBbox(d) {
@@ -50,11 +51,14 @@ export function pickCloseThreat(detections, options = {}) {
 
   for (let i = 0; i < detections.length; i += 1) {
     const d = detections[i];
-    if ((d.confidence || 0) < MIN_CONFIDENCE) continue;
+    const conf = d.confidence || 0;
+    const className = classKey(d.name);
+    const isPerson = className === 'person' || className.includes('person');
+    if (isPerson && conf < PERSON_MIN_CONFIDENCE) continue;
+    if (!isPerson && conf < MIN_CONFIDENCE) continue;
     const dist = effectiveDistanceMeters(d);
     if (dist == null || dist > cap) continue;
 
-    const className = classKey(d.name);
     if (!best || dist < best.distanceM) {
       const isPerson = className === 'person' || className.includes('person');
       const displayLabel = isPerson

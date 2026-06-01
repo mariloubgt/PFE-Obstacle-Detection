@@ -6,6 +6,7 @@ Dual YOLO: outdoor best.pt + indoor best indoor.pt (merged detections).
 
 from __future__ import annotations
 import io
+import json
 import os
 import sys
 import time
@@ -34,7 +35,8 @@ import uvicorn
 
 from api.vision_pipeline import estimate_distance_m, run_gemini, scene_top5_cached
 from api.llava_navigation import run_llava_navigation_if_enabled
-from api.groq_navigation import run_groq_navigation, status as groq_status
+from api.groq_navigation import prepare_image_data_url, run_groq_navigation, status as groq_status
+from api.nav_detection import filter_nav_detections, strip_stale_outdoor_person
 from api import runtime_lab
 
 
@@ -68,9 +70,10 @@ def _parse_opt_float(value: Optional[str], default: float, lo: float, hi: float)
     return max(lo, min(hi, x))
 
 
-YOLO_ROUTE = os.environ.get("YOLO_ROUTE", "fast").strip().lower()
-YOLO_INDOOR_EVERY_N = max(1, int(os.environ.get("YOLO_INDOOR_EVERY_N", "2")))
-YOLO_MAX_LONG_EDGE = max(640, int(os.environ.get("YOLO_MAX_LONG_EDGE", "1280")))
+YOLO_ROUTE = os.environ.get("YOLO_ROUTE", "auto").strip().lower()
+YOLO_INDOOR_EVERY_N = max(1, int(os.environ.get("YOLO_INDOOR_EVERY_N", "1")))
+YOLO_OUTDOOR_EVERY_N = max(1, int(os.environ.get("YOLO_OUTDOOR_EVERY_N", "3")))
+YOLO_MAX_LONG_EDGE = max(640, int(os.environ.get("YOLO_MAX_LONG_EDGE", "960")))
 _fast_frame_counter = 0
 _last_outdoor_dets: list[dict[str, Any]] = []
 _last_indoor_dets: list[dict[str, Any]] = []
@@ -95,6 +98,13 @@ INDOOR_PREFERRED = frozenset(
         "door",
         "table",
         "potted_plant",
+        "exit",
+        "fireextinguisher",
+        "fire_extinguisher",
+        "printer",
+        "screen",
+        "trashbin",
+        "clock",
     }
 )
 OUTDOOR_PREFERRED = frozenset(
@@ -220,10 +230,12 @@ def _extract_detections(
                 ),
                 2,
             )
+        conf_r = round(conf, 4)
         out.append(
             {
                 "name": name,
-                "confidence": round(conf, 4),
+                "confidence": conf_r,
+                "raw_confidence": conf_r,
                 "x1": round(x1 / img_w, 6),
                 "y1": round(y1 / img_h, 6),
                 "x2": round(x2 / img_w, 6),
@@ -268,38 +280,84 @@ def _predict_one(yolo_model: YOLO, img: Image.Image, source: str, req_hfov: floa
     ), ms
 
 
-def _run_dual_yolo(img: Image.Image, req_hfov: float, req_scale: float) -> tuple[list[dict[str, Any]], float]:
+def _finalize_nav_detections(
+    items: list[dict[str, Any]], img: Image.Image, yolo_ms: float
+) -> tuple[list[dict[str, Any]], float]:
+    w, h = img.size
+    return filter_nav_detections(items, img_w=w, img_h=h), yolo_ms
+
+
+def _run_dual_yolo(
+    img: Image.Image,
+    req_hfov: float,
+    req_scale: float,
+    profile: str = "auto",
+) -> tuple[list[dict[str, Any]], float]:
     global _fast_frame_counter, _last_outdoor_dets, _last_indoor_dets
 
+    profile = (profile or "auto").strip().lower()
     route = runtime_lab.get_yolo_route(YOLO_ROUTE)
     if route not in ("auto", "both", "outdoor", "indoor", "fast"):
-        route = "fast"
+        route = "auto"
+
+    if profile == "indoor" and model_indoor is not None:
+        dets, ms = _predict_one(model_indoor, img, "indoor", req_hfov, req_scale)
+        return _finalize_nav_detections(dets, img, ms)
+    if profile == "outdoor" and model_outdoor is not None:
+        dets, ms = _predict_one(model_outdoor, img, "outdoor", req_hfov, req_scale)
+        return _finalize_nav_detections(dets, img, ms)
 
     if route == "outdoor" and model_outdoor is not None:
-        return _predict_one(model_outdoor, img, "outdoor", req_hfov, req_scale)
+        dets, ms = _predict_one(model_outdoor, img, "outdoor", req_hfov, req_scale)
+        return _finalize_nav_detections(dets, img, ms)
     if route == "indoor" and model_indoor is not None:
-        return _predict_one(model_indoor, img, "indoor", req_hfov, req_scale)
+        dets, ms = _predict_one(model_indoor, img, "indoor", req_hfov, req_scale)
+        return _finalize_nav_detections(dets, img, ms)
 
-    # Smooth real-time: outdoor every frame, indoor every Nth frame, merge cached heads.
-    if route == "fast":
+    # Auto/fast: indoor every frame; outdoor every Nth (cached). Strip weak outdoor person when skipping.
+    if route in ("auto", "fast"):
         total_ms = 0.0
-        if model_outdoor is not None:
-            _last_outdoor_dets, ms = _predict_one(
-                model_outdoor, img, "outdoor", req_hfov, req_scale
-            )
-            total_ms = max(total_ms, ms)
         _fast_frame_counter += 1
-        run_indoor = (
-            model_indoor is not None
-            and (_fast_frame_counter % YOLO_INDOOR_EVERY_N == 0)
+        run_outdoor = model_outdoor is not None and (
+            _fast_frame_counter % YOLO_OUTDOOR_EVERY_N == 0
         )
+        run_indoor = model_indoor is not None and (
+            _fast_frame_counter % YOLO_INDOOR_EVERY_N == 0
+        )
+        if not run_outdoor:
+            _last_outdoor_dets = strip_stale_outdoor_person(_last_outdoor_dets)
+
+        jobs: list[tuple[YOLO, str]] = []
+        if run_outdoor:
+            jobs.append((model_outdoor, "outdoor"))
         if run_indoor:
-            _last_indoor_dets, ms_in = _predict_one(
-                model_indoor, img, "indoor", req_hfov, req_scale
-            )
-            total_ms = max(total_ms, ms_in)
+            jobs.append((model_indoor, "indoor"))
+
+        if len(jobs) == 2:
+            futures = [
+                _yolo_pool.submit(_predict_one, m, img, src, req_hfov, req_scale)
+                for m, src in jobs
+            ]
+            for (m, src), fut in zip(jobs, futures):
+                dets, ms = fut.result()
+                total_ms = max(total_ms, ms)
+                if src == "outdoor":
+                    _last_outdoor_dets = dets
+                else:
+                    _last_indoor_dets = dets
+        elif len(jobs) == 1:
+            m, src = jobs[0]
+            dets, ms = _predict_one(m, img, src, req_hfov, req_scale)
+            total_ms = ms
+            if src == "outdoor":
+                _last_outdoor_dets = dets
+            else:
+                _last_indoor_dets = dets
+
         combined = list(_last_outdoor_dets) + list(_last_indoor_dets)
-        return _merge_detections(combined), total_ms
+        merged = _merge_detections(combined)
+        w, h = img.size
+        return _finalize_nav_detections(merged, img, total_ms)
 
     jobs: list[tuple[YOLO, str]] = []
     if model_outdoor is not None:
@@ -309,7 +367,8 @@ def _run_dual_yolo(img: Image.Image, req_hfov: float, req_scale: float) -> tuple
     if not jobs:
         return [], 0.0
     if len(jobs) == 1:
-        return _predict_one(jobs[0][0], img, jobs[0][1], req_hfov, req_scale)
+        dets, ms = _predict_one(jobs[0][0], img, jobs[0][1], req_hfov, req_scale)
+        return _finalize_nav_detections(dets, img, ms)
 
     futures = [
         _yolo_pool.submit(_predict_one, m, img, src, req_hfov, req_scale)
@@ -322,7 +381,7 @@ def _run_dual_yolo(img: Image.Image, req_hfov: float, req_scale: float) -> tuple
         combined.extend(dets)
         total_ms = max(total_ms, ms)
     merged = _merge_detections(combined)
-    return merged, total_ms
+    return _finalize_nav_detections(merged, img, total_ms)
 
 
 def _load_yolo_models(outdoor_path: Path, indoor_path: Path) -> list[str]:
@@ -357,7 +416,8 @@ def load_model():
 
     print(
         f"YOLO ready ({', '.join(loaded)}) — route={YOLO_ROUTE}, conf={CONF}, "
-        f"iou={YOLO_IOU}, imgsz={YOLO_IMGSZ}, max_det={YOLO_MAX_DET}"
+        f"iou={YOLO_IOU}, imgsz={YOLO_IMGSZ}, max_det={YOLO_MAX_DET}, "
+        f"outdoor_every={YOLO_OUTDOOR_EVERY_N}, indoor_every={YOLO_INDOOR_EVERY_N}"
     )
 
     gst = groq_status()
@@ -472,6 +532,9 @@ async def predict(
     detailed: str = Form("false"),
     hfov_deg: Optional[str] = Form(None),
     depth_scale: Optional[str] = Form(None),
+    yolo_profile: Optional[str] = Form("auto"),
+    skip_yolo: str = Form("false"),
+    detections_json: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     content = await file.read()
@@ -484,12 +547,39 @@ async def predict(
     req_scale = _parse_opt_float(depth_scale, DEPTH_SCALE_ENV, 0.35, 2.5)
     is_detailed = str(detailed).strip().lower() in ("1", "true", "yes", "on")
 
-    detections, yolo_ms = _run_dual_yolo(img, req_hfov, req_scale)
+    yolo_prof = (yolo_profile or "auto").strip().lower()
+    if yolo_prof not in ("auto", "indoor", "outdoor", "dual"):
+        yolo_prof = "auto"
 
     groq_on = str(use_groq).strip().lower() in ("1", "true", "yes", "on")
     groq_on = groq_on and runtime_lab.get_enable_groq(True)
+    groq_mode_norm = "navigate" if str(groq_mode).strip().lower() == "navigate" else "describe"
+    skip_yolo_on = str(skip_yolo).strip().lower() in ("1", "true", "yes", "on")
+
+    encode_fut = None
+    if groq_on and not skip_yolo_on:
+        encode_fut = _yolo_pool.submit(
+            prepare_image_data_url, img, navigate=(groq_mode_norm == "navigate")
+        )
+
+    if skip_yolo_on and detections_json:
+        try:
+            parsed = json.loads(detections_json)
+            detections = parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            detections = []
+        yolo_ms = 0.0
+    else:
+        detections, yolo_ms = _run_dual_yolo(img, req_hfov, req_scale, profile=yolo_prof)
+
     if groq_on:
-        groq_result = run_groq_navigation(img, detections, mode=groq_mode)
+        preencoded = encode_fut.result() if encode_fut is not None else None
+        groq_result = run_groq_navigation(
+            img,
+            detections,
+            mode=groq_mode,
+            image_data_url=preencoded,
+        )
     else:
         groq_result = {
             "scene": None,
@@ -560,6 +650,8 @@ async def predict(
         "detections": detections,
         "inference_ms": round(yolo_ms, 2),
         "yolo_route": runtime_lab.get_yolo_route(YOLO_ROUTE),
+        "yolo_profile": yolo_prof,
+        "staged": skip_yolo_on,
         "scene": {"top5": scene_list},
         "groq": groq_result,
         "gemini": gem,
