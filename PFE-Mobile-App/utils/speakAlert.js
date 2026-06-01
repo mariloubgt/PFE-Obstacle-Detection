@@ -2,6 +2,8 @@ import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { AppState, NativeModules, Platform } from 'react-native';
 
+import { alertOutputState, applyAlertVolumeToSystemOutput, applyMaxAlertVolumeForUrgent } from './systemOutputVolume';
+
 let audioModeReady = false;
 let audioPrepPromise = null;
 let appStateSub = null;
@@ -13,11 +15,54 @@ let loopPromise = null;
 let pendingLatest = null;
 const speechListeners = new Set();
 
+function speechAudioModule() {
+  return NativeModules.SpeechAudioModule;
+}
+
+async function stopNativeUrgentSpeech() {
+  const mod = speechAudioModule();
+  if (!mod?.stopUrgentSpeech) return;
+  try {
+    await mod.stopUrgentSpeech();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function speakUrgentNative(line, ttsOptions, opts = {}) {
+  const playBeeps = opts.playBeeps !== false;
+  const mod = speechAudioModule();
+  if (!mod?.speakUrgent) {
+    await speakLineNow(line, ttsOptions);
+    return;
+  }
+
+  setSpeaking(true);
+  if (typeof ttsOptions.onStart === 'function') ttsOptions.onStart();
+
+  try {
+    await applyMaxAlertVolumeForUrgent();
+    if (playBeeps && mod.playUrgentBeeps) {
+      await mod.playUrgentBeeps();
+    }
+    await mod.speakUrgent(line, ttsOptions.rate ?? 0.95, ttsOptions.pitch ?? 1.5);
+  } catch (err) {
+    if (__DEV__) console.warn('[speakUrgentNative]', err);
+    await speakLineNow(line, ttsOptions);
+  } finally {
+    setSpeaking(false);
+  }
+}
+
 async function forceSpeakerRouteIOS() {
   if (Platform.OS !== 'ios') return;
-  const mod = NativeModules.SpeechAudioModule;
+  const mod = speechAudioModule();
   if (mod?.prepareForSpeech) {
-    await mod.prepareForSpeech();
+    try {
+      await mod.prepareForSpeech();
+    } catch (e) {
+      if (__DEV__) console.warn('[forceSpeakerRouteIOS]', e);
+    }
   } else if (__DEV__) {
     console.warn(
       '[speakAlert] SpeechAudioModule missing — rebuild: npm run ios -- --device'
@@ -54,16 +99,21 @@ export async function prepareSpeechAudio(force = false) {
 
   audioPrepPromise = (async () => {
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
-        interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
-      await forceSpeakerRouteIOS();
+      if (Platform.OS === 'ios') {
+        // expo-av setAudioModeAsync uses Playback WITHOUT DefaultToSpeaker → quiet earpiece.
+        // Native module forces loud speaker output.
+        await forceSpeakerRouteIOS();
+      } else {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+          interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+      }
       audioModeReady = true;
     } catch (e) {
       if (__DEV__) console.warn('[prepareSpeechAudio]', e);
@@ -85,10 +135,36 @@ export function clipForSpeech(text, max) {
   return `${body.trim()}…`;
 }
 
+/** Split long descriptions into sentence chunks for smoother iOS TTS. */
+export function splitSpeechChunks(text, maxLen = 200) {
+  const t = String(text || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (!t) return [];
+  if (t.length <= maxLen) return [t];
+
+  const parts = t.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (parts.length <= 1) return [clipForSpeech(t, maxLen)];
+
+  const chunks = [];
+  let buf = '';
+  for (const part of parts) {
+    const candidate = buf ? `${buf} ${part}` : part;
+    if (candidate.length <= maxLen) {
+      buf = candidate;
+      continue;
+    }
+    if (buf) chunks.push(buf);
+    buf = part.length <= maxLen ? part : clipForSpeech(part, maxLen);
+  }
+  if (buf) chunks.push(buf);
+  return chunks.length ? chunks : [clipForSpeech(t, maxLen)];
+}
+
 export function normalizeSpeechRate(rate) {
   const n = typeof rate === 'number' && !Number.isNaN(rate) ? rate : 0.95;
   const user = Math.min(1, Math.max(0.55, n));
-  return 0.92 + ((user - 0.55) / 0.45) * 0.08;
+  return 0.9 + ((user - 0.55) / 0.45) * 0.06;
 }
 
 function speakLineNow(line, ttsOptions) {
@@ -99,26 +175,30 @@ function speakLineNow(line, ttsOptions) {
       rate: normalizeSpeechRate(ttsOptions.rate),
       onStart: () => {
         setSpeaking(true);
-        if (typeof ttsOptions.onStart === 'function') ttsOptions.onStart();
       },
       onDone: () => {
         setSpeaking(false);
-        if (typeof ttsOptions.onDone === 'function') ttsOptions.onDone();
-        resolve();
+        resolve({ status: 'done' });
       },
       onStopped: () => {
         setSpeaking(false);
-        if (typeof ttsOptions.onStopped === 'function') ttsOptions.onStopped();
-        resolve();
+        resolve({ status: 'stopped' });
       },
       onError: (err) => {
         setSpeaking(false);
         if (__DEV__) console.warn('[speakAlert] error', err);
-        if (typeof ttsOptions.onError === 'function') ttsOptions.onError(err);
-        resolve();
+        resolve({ status: 'error', err });
       },
     });
   });
+}
+
+function linesForItem(item) {
+  const { line, speechOptions } = item;
+  const useChunks =
+    speechOptions.sequential === true ||
+    (speechOptions.sequential !== false && line.length > 180);
+  return useChunks ? splitSpeechChunks(line) : [line];
 }
 
 async function runSpeechLoop(gen) {
@@ -126,8 +206,53 @@ async function runSpeechLoop(gen) {
     const next = pendingLatest;
     pendingLatest = null;
     if (!next) break;
-    if (__DEV__) console.log('[speakAlert]', next.line.slice(0, 120));
-    await speakLineNow(next.line, next.speechOptions);
+
+    const {
+      onStart,
+      onDone,
+      onStopped,
+      onError,
+      ...speechOptions
+    } = next.speechOptions;
+
+    const parts = linesForItem({ line: next.line, speechOptions });
+    const urgent = speechOptions?.pitch > 1.1;
+    const useNativeUrgent =
+      urgent && Platform.OS === 'ios' && speechAudioModule()?.speakUrgent;
+
+    if (!useNativeUrgent) {
+      await prepareSpeechAudio(true);
+    }
+    if (urgent && Platform.OS !== 'web') {
+      await applyMaxAlertVolumeForUrgent();
+    }
+
+    let started = false;
+    let lastStatus = 'done';
+
+    for (let i = 0; i < parts.length; i += 1) {
+      const part = parts[i];
+      if (gen !== runGeneration) {
+        lastStatus = 'stopped';
+        break;
+      }
+      if (__DEV__) console.log('[speakAlert]', part.slice(0, 120));
+      if (!started) {
+        started = true;
+        onStart?.();
+      }
+      if (useNativeUrgent) {
+        await speakUrgentNative(part, speechOptions, { playBeeps: i === 0 });
+      } else {
+        const result = await speakLineNow(part, speechOptions);
+        lastStatus = result?.status || 'done';
+        if (lastStatus === 'stopped' || lastStatus === 'error') break;
+      }
+    }
+
+    if (lastStatus === 'stopped') onStopped?.();
+    else if (lastStatus === 'error') onError?.(new Error('TTS failed'));
+    else onDone?.();
   }
 }
 
@@ -147,6 +272,7 @@ function kickSpeechLoop() {
  * @param {import('expo-speech').SpeechOptions & {
  *   interrupt?: boolean;
  *   latest?: boolean;
+ *   sequential?: boolean;
  *   maxChars?: number;
  * }} [options]
  */
@@ -154,19 +280,19 @@ export function speakAlert(text, options = {}) {
   const raw = typeof text === 'string' ? text.trim() : '';
   if (!raw) return;
 
-  const { interrupt = false, latest = false, maxChars, ...ttsOptions } = options;
+  const { interrupt = false, latest = false, sequential, maxChars, ...ttsOptions } = options;
   const line = maxChars ? clipForSpeech(raw, maxChars) : raw;
   if (!line) return;
 
-  if (!audioModeReady) {
-    void prepareSpeechAudio();
-  }
-
-  const item = { line, speechOptions: ttsOptions };
+  const item = {
+    line,
+    speechOptions: { ...ttsOptions, sequential },
+  };
 
   if (interrupt) {
     runGeneration += 1;
     Speech.stop();
+    void stopNativeUrgentSpeech();
     setSpeaking(false);
     loopPromise = null;
     pendingLatest = item;
@@ -189,6 +315,35 @@ export function speakAlert(text, options = {}) {
   kickSpeechLoop();
 }
 
+/** Wait until playback finishes (describe / alerts). */
+export function speakAlertAsync(text, options = {}) {
+  return new Promise((resolve) => {
+    const raw = typeof text === 'string' ? text.trim() : '';
+    if (!raw) {
+      resolve();
+      return;
+    }
+    const { onDone, onStopped, onError, ...rest } = options;
+    speakAlert(text, {
+      ...rest,
+      interrupt: rest.interrupt !== false,
+      sequential: rest.sequential !== false,
+      onDone: () => {
+        onDone?.();
+        resolve();
+      },
+      onStopped: () => {
+        onStopped?.();
+        resolve();
+      },
+      onError: (e) => {
+        onError?.(e);
+        resolve();
+      },
+    });
+  });
+}
+
 export function initSpeechAudio() {
   void prepareSpeechAudio();
   if (appStateSub) return;
@@ -202,6 +357,7 @@ export function initSpeechAudio() {
 export function stopSpeech() {
   runGeneration += 1;
   Speech.stop();
+  void stopNativeUrgentSpeech();
   pendingLatest = null;
   loopPromise = null;
   setSpeaking(false);

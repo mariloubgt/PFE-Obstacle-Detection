@@ -6,15 +6,22 @@ import { Platform } from 'react-native';
  * @returns {number}
  */
 export function clampAlertVolume01(v) {
-  const n = typeof v === 'number' && !Number.isNaN(v) ? v : 0.8;
+  const n = typeof v === 'number' && !Number.isNaN(v) ? v : 1;
   return Math.min(1, Math.max(0, n));
 }
 
 /**
- * Spread into expo-speech. Loudness is driven by system output volume
- * (see applyAlertVolumeToSystemOutput / saveAlertVolume). Utterance stays at full relative level.
+ * Map alert slider → expo-speech volume. Keeps alerts loud even below 100%.
+ * @param {number} [alertVolume01]
+ * @param {{ urgent?: boolean }} [opts]
  */
-export function ttsVolumeOptions(_alertVolume01) {
+export function ttsVolumeOptions(alertVolume01, opts = {}) {
   if (Platform.OS === 'web') return {};
-  return { volume: 1 };
+  if (opts.urgent) {
+    return { volume: 1 };
+  }
+  const v = clampAlertVolume01(alertVolume01);
+  // Floor 0.88 so alerts stay audible; slider still scales up to 1.0.
+  const speechVol = 0.88 + v * 0.12;
+  return { volume: Math.min(1, speechVol) };
 }

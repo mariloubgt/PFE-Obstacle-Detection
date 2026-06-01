@@ -11,25 +11,25 @@ import { LAYOUT } from '../constants/theme';
 import { FONTS } from '../constants/typography';
 import { useThemeColors } from '../contexts/ThemeContext';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
+import { useDescribeEnvironmentHotword } from '../hooks/useDescribeEnvironmentHotword';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
 import { syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { buildTtsOptions } from '../utils/buildTtsOptions';
-import { speakAlert, stopSpeech } from '../utils/speakAlert';
+import { speakAlert, stopSpeech, prepareSpeechAudio, speakAlertAsync } from '../utils/speakAlert';
 import { captureAndDescribeScene } from '../utils/describeSceneFromCamera';
 import { isSimulatorDevice } from '../utils/isSimulator';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back' };
 
-// Module-level slot: MainNavigationScreen calls triggerSceneDescribe() directly.
-// No React Navigation param tricks — guaranteed to fire every tap.
+// Scene chat — describe + voice commands live here only.
 let _sceneDescribeCallback = null;
 export function triggerSceneDescribe() {
   if (_sceneDescribeCallback) _sceneDescribeCallback();
 }
 
 const WELCOME_MESSAGE =
-  'Tap Describe scene or the Sound icon for a spoken summary. On the main screen, Sound also describes without leaving the camera.';
+  'Say describe for a spoken scene summary. Say stop to go back to navigation. Say activate navigation to turn on obstacle detection.';
 
 function nextId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -39,7 +39,7 @@ function formatTime(d = new Date()) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-export default function SceneQueryScreen({ navigation }) {
+export default function SceneQueryScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
   const styles = useMemo(() => createSceneQueryStyles(colors), [colors]);
@@ -47,6 +47,8 @@ export default function SceneQueryScreen({ navigation }) {
   const cameraRef = useRef(null);
   /** Latest describe request wins; older runs exit before speaking / appending. */
   const describeGenerationRef = useRef(0);
+  const [voiceStatus, setVoiceStatus] = useState('off');
+  const [voiceEnabled, setVoiceEnabled] = useState(DEFAULTS.handsFreeDescribe);
   const [camPermission, setCamPermission] = useState(null);
   const [messages, setMessages] = useState(() => [
     { id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() },
@@ -57,8 +59,13 @@ export default function SceneQueryScreen({ navigation }) {
   const isSimulator = isSimulatorDevice();
   const prefsRef = useRef(DEFAULTS);
 
-  const speakReply = useCallback((text) => {
-    speakAlert(text, buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate));
+  const speakReply = useCallback(async (text) => {
+    await prepareSpeechAudio(true);
+    await speakAlertAsync(text, {
+      ...buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate),
+      interrupt: true,
+      sequential: true,
+    });
   }, []);
 
   useEffect(() => {
@@ -147,7 +154,7 @@ export default function SceneQueryScreen({ navigation }) {
 
       appendMessage({ id: nextId(), role: 'assistant', text: res.text });
       if (res.text && res.shouldSpeak) {
-        speakReply(res.text);
+        await speakReply(res.text);
       }
     } finally {
       if (generation === describeGenerationRef.current) {
@@ -171,7 +178,7 @@ export default function SceneQueryScreen({ navigation }) {
 
   useVolumeHardwareShortcut(navigation, {
     enabled: true,
-    action: volumeHardwareAction,
+    action: volumeHardwareAction === 'none' ? 'none' : 'scene_query',
     onDescribeEnvironment: () => {
       void runGroqDescribeRef.current();
     },
@@ -187,14 +194,51 @@ export default function SceneQueryScreen({ navigation }) {
       void loadAppPreferences().then((p) => {
         prefsRef.current = p;
         setVolumeHardwareAction(p.volumeHardwareAction);
+        setVoiceEnabled(p.handsFreeDescribe);
       });
-    }, [refreshCamPermission])
+      if (route.params?.autoDescribe) {
+        navigation.setParams({ autoDescribe: undefined });
+        setTimeout(() => void runGroqDescribeRef.current(), 400);
+      }
+    }, [refreshCamPermission, route.params?.autoDescribe, navigation])
   );
 
   const onEndSession = useCallback(() => {
-    Speech.stop();
+    describeGenerationRef.current += 1;
+    setIsTyping(false);
+    stopSpeech();
     setMessages([{ id: nextId(), role: 'assistant', text: WELCOME_MESSAGE, time: formatTime() }]);
   }, []);
+
+  const onStopDescribe = useCallback(() => {
+    describeGenerationRef.current += 1;
+    stopSpeech();
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.navigate('Main');
+    }
+  }, [navigation]);
+
+  const onActivateObstacle = useCallback(() => {
+    describeGenerationRef.current += 1;
+    stopSpeech();
+    navigation.navigate('Main', { enableObstacle: true });
+  }, [navigation]);
+
+  useDescribeEnvironmentHotword({
+    enabled: voiceEnabled,
+    autoListen: voiceEnabled,
+    cameraRef,
+    alertVolumeRef,
+    getTtsOpts: () => buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate),
+    onPhraseMatched: () => runGroqDescribeRef.current(),
+    onEndSession: onEndSession,
+    onGoToObstacle: onStopDescribe,
+    onActivateNavigation: onActivateObstacle,
+    onListeningChange: () => {},
+    onVoiceStatusChange: setVoiceStatus,
+  });
 
   return (
     <View
@@ -219,6 +263,19 @@ export default function SceneQueryScreen({ navigation }) {
           <MaterialCommunityIcons name="chevron-left" size={28} color={colors.teal} />
         </Pressable>
         <Text style={styles.headerTitle}>Scene description</Text>
+        {voiceEnabled &&
+        (voiceStatus === 'listening' || voiceStatus === 'ready' || voiceStatus === 'starting') ? (
+          <View style={styles.voicePill} accessibilityLabel={`Voice ${voiceStatus}`}>
+            <MaterialCommunityIcons
+              name={voiceStatus === 'listening' ? 'microphone' : 'microphone-outline'}
+              size={14}
+              color={colors.tealBright}
+            />
+            <Text style={styles.voicePillText}>
+              {voiceStatus === 'listening' ? 'Listening' : 'Voice on'}
+            </Text>
+          </View>
+        ) : null}
         <Pressable
           style={({ pressed }) => [styles.headerSoundBtn, pressed && styles.pressed]}
           onPress={() => {
@@ -349,10 +406,7 @@ export default function SceneQueryScreen({ navigation }) {
         </Pressable>
         <Pressable
           style={({ pressed }) => [styles.backNavBtn, pressed && styles.pressed]}
-          onPress={() => {
-            Speech.stop();
-            navigation.goBack();
-          }}
+          onPress={onStopDescribe}
         >
           <MaterialCommunityIcons name="arrow-left" size={20} color={colors.teal} />
           <Text style={styles.backNavText}>Back to Nav</Text>
@@ -387,6 +441,20 @@ function createSceneQueryStyles(colors) {
     flex: 1,
     color: colors.white,
     fontSize: 20,
+    fontFamily: FONTS.en.bold,
+  },
+  voicePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.bgElevated,
+  },
+  voicePillText: {
+    color: colors.tealBright,
+    fontSize: 11,
     fontFamily: FONTS.en.bold,
   },
   headerSoundBtn: {

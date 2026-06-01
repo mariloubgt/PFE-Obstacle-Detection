@@ -2,14 +2,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ALERT_VOLUME_KEY } from '../constants/storageKeys';
 import { applyAlertVolumeToSystemOutput } from './systemOutputVolume';
 
-const DEFAULT = 0.8;
+const DEFAULT = 1;
 
 function clamp01(n) {
   if (Number.isNaN(n)) return DEFAULT;
   return Math.min(1, Math.max(0, n));
 }
 
-/** @returns {Promise<number>} 0–1, default 0.8 (80%) */
+/** @returns {Promise<number>} 0–1, default 1.0 (100%) */
 export async function loadAlertVolume() {
   try {
     const v = await AsyncStorage.getItem(ALERT_VOLUME_KEY);

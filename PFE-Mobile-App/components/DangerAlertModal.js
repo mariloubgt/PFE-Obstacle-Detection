@@ -48,6 +48,19 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
     void syncStoredAlertVolumeToSystem();
   }, [visible]);
 
+  useEffect(() => {
+    if (!visible || !alertMessage) return;
+    void syncStoredAlertVolumeToSystem().then(() => {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      }
+      speakAlert(alertMessage, {
+        ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current, { urgent: true }),
+        interrupt: true,
+      });
+    });
+  }, [visible, alertMessage]);
+
   const runRepeat = useCallback(() => {
     const now = Date.now();
     if (now - lastShakeAt.current < SHAKE_COOLDOWN_MS) return;
@@ -56,7 +69,7 @@ export default function DangerAlertModal({ visible, displayLabel, distanceM, ale
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
     speakAlert(alertMessage, {
-      ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current),
+      ...buildTtsOptions(alertOutputState.baseline01, speechRateRef.current, { urgent: true }),
       interrupt: true,
     });
   }, [alertMessage]);

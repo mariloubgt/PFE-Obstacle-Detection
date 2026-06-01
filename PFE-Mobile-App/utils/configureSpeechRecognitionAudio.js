@@ -9,7 +9,7 @@ export function configureSpeechRecognitionAudioIOS(module) {
     module.setCategoryIOS({
       category: 'playAndRecord',
       categoryOptions: ['defaultToSpeaker', 'allowBluetooth'],
-      mode: 'measurement',
+      mode: 'spokenAudio',
     });
     module.setAudioSessionActiveIOS?.(true, { notifyOthersOnDeactivation: true });
   } catch {

@@ -82,7 +82,7 @@ export default function WelcomeScreen({ navigation }) {
             iconColor="#C084FC"
             iconBg="#4C1D95"
             title="Voice interaction"
-            subtitle="Powered by Gemini AI"
+            subtitle="Groq scene description on your PC server"
           />
           <FeatureCard
             styles={styles}

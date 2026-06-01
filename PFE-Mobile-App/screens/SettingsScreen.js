@@ -64,8 +64,8 @@ const FRAME_PRESETS = [
 
 const VOLUME_HW_OPTIONS = [
   { value: 'none', label: 'Off' },
-  { value: 'describe', label: 'Describe environment' },
-  { value: 'scene_query', label: 'Open scene description chat' },
+  { value: 'scene_query', label: 'Open scene chat' },
+  { value: 'describe', label: 'Open scene chat + describe' },
 ];
 
 function formatFrameValue(ms) {
@@ -282,7 +282,7 @@ export default function SettingsScreen({ navigation }) {
           <ValueRow
             styles={styles}
             title="Alert Volume"
-            subtitle="Same level as the phone’s volume buttons — for all spoken guidance"
+            subtitle="Sets phone output level — use 100% for loudest obstacle warnings"
             value={`${Math.round(vol * 100)}%`}
             onPress={() => setVolOpen(true)}
           />
@@ -357,7 +357,7 @@ export default function SettingsScreen({ navigation }) {
           <ValueRow
             styles={styles}
             title="Physical volume buttons"
-            subtitle="Up/down runs describe; device volume unchanged. Speech loudness: Alert volume"
+            subtitle="Volume up/down opens scene chat (describe lives there only)"
             value={volumeHardwareRowLabel(volumeHw)}
             onPress={() => setVolumeHwOpen(true)}
           />
@@ -366,7 +366,7 @@ export default function SettingsScreen({ navigation }) {
             styles={styles}
             colors={colors}
             title="Hands-free phrase"
-            subtitle="Tap the voice bar on Main, then say describe environment, activate navigation, or stop navigation"
+            subtitle="Scene chat only — say describe, stop to go back, or activate navigation for obstacles"
             value={handsFreePhrase}
             onValueChange={async (b) => setHandsFreePhrase(await saveHandsFreeDescribe(b))}
             last

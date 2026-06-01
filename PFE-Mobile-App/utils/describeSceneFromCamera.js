@@ -16,7 +16,7 @@ export function pickSceneDescriptionText(data) {
   );
   const yoloFallback = describeFromDetections(visible);
   const text = groqText || yoloFallback;
-  const shouldSpeak = Boolean(groqText) || visible.length > 0;
+  const shouldSpeak = Boolean(text?.trim());
   return { text, shouldSpeak, groqText, yoloFallback };
 }
 
@@ -24,27 +24,41 @@ export function pickSceneDescriptionText(data) {
  * Capture one frame and run Groq describe (YOLO fallback). Stays on current screen.
  * @param {React.RefObject} cameraRef
  */
+async function ensureCameraReadyForCapture(cameraRef) {
+  try {
+    cameraRef.current?.resumePreview?.();
+  } catch {
+    /* ignore */
+  }
+  await new Promise((r) => setTimeout(r, 400));
+}
+
 export async function captureAndDescribeScene(cameraRef) {
   if (!cameraRef?.current) {
     return { ok: false, error: 'Camera is not ready.', text: null, shouldSpeak: false };
   }
 
+  await ensureCameraReadyForCapture(cameraRef);
+
   let photo;
+  const captureOpts = { quality: 0.28, skipProcessing: true };
   try {
-    photo = await cameraRef.current.takePictureAsync({
-      quality: 0.28,
-      skipProcessing: true,
-    });
-  } catch (camErr) {
-    return {
-      ok: false,
-      error:
-        camErr instanceof Error
-          ? `Could not capture a frame: ${camErr.message}`
-          : 'Could not capture a camera frame.',
-      text: null,
-      shouldSpeak: false,
-    };
+    photo = await cameraRef.current.takePictureAsync(captureOpts);
+  } catch (firstErr) {
+    await ensureCameraReadyForCapture(cameraRef);
+    try {
+      photo = await cameraRef.current.takePictureAsync(captureOpts);
+    } catch (camErr) {
+      return {
+        ok: false,
+        error:
+          camErr instanceof Error
+            ? `Could not capture a frame: ${camErr.message}`
+            : 'Could not capture a camera frame.',
+        text: null,
+        shouldSpeak: false,
+      };
+    }
   }
 
   const api = await loadInferenceApiUrl();

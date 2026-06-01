@@ -67,6 +67,15 @@ def _active_groq_model() -> str:
         return DEFAULT_MODEL
 
 
+def _min_interval_s() -> float:
+    try:
+        from api.runtime_lab import get_groq_min_interval
+
+        return get_groq_min_interval(DEFAULT_MIN_INTERVAL_S)
+    except ImportError:
+        return DEFAULT_MIN_INTERVAL_S
+
+
 def _api_key() -> str | None:
     key = (os.environ.get("GROQ_API_KEY") or "").strip()
     return key or None
@@ -114,15 +123,12 @@ def _format_detections_for_nav(detections: list[dict[str, Any]]) -> str:
 
 
 def _build_navigation_prompt(detections: list[dict[str, Any]]) -> str:
-    """Navigation prompt: YOLO list + image — catch hazards the detector missed."""
+    """Navigation prompt: always ends with a concrete action verb the person must execute."""
     det_text = _format_detections_for_nav(detections)
-    return f"""You are guiding a blind person. An object detector (YOLO) produced the list below.
-It ONLY knows a fixed set of trained classes and often MISSES obstacles (steps, curbs, walls, glass doors, bags, poles, branches, wet floors, low ceilings, etc.).
+    return f"""You are guiding a blind person. Use the obstacle list below to give ONE clear walking instruction.
 
-YOLO obstacle list (may be incomplete — nearest first):
+Obstacle list (nearest first):
 {det_text}
-
-Look at the image yourself. Add ANY other hazards NOT in the YOLO list. Your guidance must reflect BOTH YOLO hits and extra hazards you see.
 
 YOUR OUTPUT MUST ALWAYS END WITH ONE OF THESE ACTIONS:
 - "Step left."
@@ -134,25 +140,30 @@ YOUR OUTPUT MUST ALWAYS END WITH ONE OF THESE ACTIONS:
 
 RULES:
 - The action is MANDATORY. Never give a sentence without an action at the end.
-- If YOLO list is empty but you see hazards in the image → warn about what YOU see and give an action.
 - If obstacle is directly ahead → pick left OR right (whichever side is clear from the image).
 - If obstacle < 1.5 m → action is "Stop." or "Step left." or "Step right." (urgent).
 - If obstacle 1.5–3 m → action is "Slow down." + direction to take.
-- If no close obstacles in YOLO or image → "Continue forward."
+- If no close obstacles → "Continue forward."
 - Never say "directly ahead" without also giving the action to avoid it.
-- Max 25 words total for guidance_en.
+- Max 20 words total for guidance_en.
 - BANNED: appears, seem, possibly, perhaps, maybe, might, I think, probably.
 
 GOOD examples:
 - "Person 1 meter ahead. Step left."
-- "YOLO missed a low step. Stop."
-- "Chair 2 meters on the right, glass door ahead. Slow down and step left."
+- "Chair 2 meters on the right. Continue forward on the left."
+- "Wall close ahead. Stop."
 - "Path is clear. Continue forward."
+- "Person 3 meters ahead. Slow down and step right."
+
+BAD examples (never do this):
+- "Person directly ahead." ← NO ACTION
+- "There is a chair on the left." ← NO ACTION
+- "Obstacle detected." ← NO ACTION
 
 Reply with ONE JSON object only — no markdown:
 {{
   "scene": "<max 10 words, what type of place is this>",
-  "guidance_en": "<max 25 words. YOLO + any extra hazards + action. MUST end with an action verb.>",
+  "guidance_en": "<max 20 words. Obstacle + distance + action. MUST end with an action verb.>",
   "risk": "<danger | caution | ok>",
   "focus": "<main obstacle name, or 'path' if clear>"
 }}"""
@@ -305,7 +316,7 @@ def run_groq_navigation(
 
         if (
             _last_result is not None
-            and (now - _last_call_mono) < DEFAULT_MIN_INTERVAL_S
+            and (now - _last_call_mono) < _min_interval_s()
             and _last_result.get("mode") == ("navigate" if is_nav else "describe")
         ):
             cached = dict(_last_result)
@@ -448,7 +459,7 @@ def run_groq_voice_query(
         chat_resp = requests.post(
             GROQ_URL,
             json={
-                "model": DEFAULT_MODEL,
+                "model": _active_groq_model(),
                 "messages": [
                     {"role": "system", "content": system},
                     {

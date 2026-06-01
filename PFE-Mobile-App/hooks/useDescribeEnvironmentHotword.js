@@ -6,16 +6,26 @@ import { useIsFocused } from '@react-navigation/native';
 
 import { buildTtsOptions } from '../utils/buildTtsOptions';
 import { configureSpeechRecognitionAudioIOS } from '../utils/configureSpeechRecognitionAudio';
+import { ensureIosLoudSpeakerRoute } from '../utils/systemOutputVolume';
 import { loadSpeechRecognitionPackage } from '../utils/loadSpeechRecognition';
 import {
   ensureSpeechRecognitionPermissions,
   isSpeechPermissionGranted,
 } from '../utils/speechRecognitionPermissions';
 import { getSpeechRecognitionNativeStatus } from '../utils/speechRecognitionNativeStatus';
+import {
+  isSpeechActive,
+  prepareSpeechAudio,
+  stopSpeech,
+  subscribeSpeechActive,
+} from '../utils/speakAlert';
 
-const PHRASE_COOLDOWN_MS = 4500;
-/** Max time to wait for a command phrase per session */
-const LISTEN_WINDOW_MS = 10000;
+const PHRASE_COOLDOWN_MS = 3200;
+const STOP_COOLDOWN_MS = 800;
+/** Tap-to-listen sessions close after this (autoListen keeps the mic open). */
+const LISTEN_WINDOW_MS = 12000;
+const RESTART_AFTER_TTS_MS = 1800;
+const RESTART_AFTER_END_MS = 900;
 
 function normalize(text) {
   return String(text || '')
@@ -24,33 +34,61 @@ function normalize(text) {
     .trim();
 }
 
-function matchesDescribe(text) {
+export function matchesDescribe(text) {
   const n = normalize(text);
-  return /\bdescribe\b/.test(n) && /\benvironment\b/.test(n);
+  if (/\bdescribe\b/.test(n) && /\b(environment|scene)\b/.test(n)) return true;
+  if (/\b(start|begin)\b/.test(n) && /\b(description|describe|describing)\b/.test(n)) {
+    return true;
+  }
+  if (n === 'describe' || n === 'description') return true;
+  return false;
 }
 
-function matchesActivateNav(text) {
-  const n = normalize(text);
-  return /\b(activate|start|begin|enable)\b/.test(n) && /\bnavigation\b/.test(n);
-}
-
-function matchesStopNav(text) {
+export function matchesStopNavigation(text) {
   const n = normalize(text);
   return /\b(stop|deactivate|end|disable|cancel)\b/.test(n) && /\bnavigation\b/.test(n);
 }
 
+export function matchesActivateNavigation(text) {
+  const n = normalize(text);
+  return /\b(activate|start|begin|enable)\b/.test(n) && /\bnavigation\b/.test(n);
+}
+
+/** "stop" → leave scene chat and return to main navigation (obstacle detection stays off). */
+export function matchesGoToObstacle(text) {
+  const n = normalize(text);
+  if (matchesStopNavigation(text)) return false;
+  if (!/\bstop\b/.test(n)) return false;
+  const words = n.split(/\s+/).filter(Boolean);
+  if (words.length <= 3) return true;
+  if (words[0] === 'stop' || words[words.length - 1] === 'stop') return true;
+  return false;
+}
+
+export function matchesEndSession(text) {
+  const n = normalize(text);
+  if (/\b(end|close|finish|reset|clear|new)\b/.test(n) && /\bsession\b/.test(n)) return true;
+  if (/\b(end|close|finish)\b/.test(n) && /\b(description|describe|describing)\b/.test(n)) {
+    return true;
+  }
+  return false;
+}
+
 /**
- * Hands-free commands — listens only when you call requestVoiceListen() (e.g. tap the banner).
- * Fires only on: describe environment | activate navigation | stop navigation.
+ * Hands-free voice commands.
+ * autoListen=true → mic stays open; no tap. Pauses during describe/TTS, then listens again.
  */
 export function useDescribeEnvironmentHotword({
   enabled,
+  autoListen = false,
   cameraRef,
   alertVolumeRef,
   getTtsOpts,
   onPhraseMatched,
   onActivateNavigation,
   onStopNavigation,
+  onGoToObstacle,
+  onEndSession,
   onListeningChange,
   onVoiceStatusChange,
   onVoiceDetailChange,
@@ -59,6 +97,8 @@ export function useDescribeEnvironmentHotword({
   const onMatchedRef = useRef(onPhraseMatched);
   const onActivateNavRef = useRef(onActivateNavigation);
   const onStopNavRef = useRef(onStopNavigation);
+  const onGoToObstacleRef = useRef(onGoToObstacle);
+  const onEndSessionRef = useRef(onEndSession);
   const getTtsOptsRef = useRef(getTtsOpts);
   const requestListenRef = useRef(() => {});
 
@@ -82,6 +122,12 @@ export function useDescribeEnvironmentHotword({
   useEffect(() => {
     onStopNavRef.current = onStopNavigation;
   }, [onStopNavigation]);
+  useEffect(() => {
+    onGoToObstacleRef.current = onGoToObstacle;
+  }, [onGoToObstacle]);
+  useEffect(() => {
+    onEndSessionRef.current = onEndSession;
+  }, [onEndSession]);
 
   useEffect(() => {
     const setListening = (active) => {
@@ -147,10 +193,13 @@ export function useDescribeEnvironmentHotword({
     const timers = [];
     const subs = [];
     let lastFireAt = 0;
+    let lastStopAt = 0;
     let sessionActive = false;
     let listenWindowTimer = null;
     let permissionsDeniedAnnounced = false;
     let permissionsReady = false;
+    let actionInFlight = false;
+    let restartTimer = null;
 
     const volOpts = () =>
       typeof getTtsOptsRef.current === 'function'
@@ -180,12 +229,33 @@ export function useDescribeEnvironmentHotword({
       }
     };
 
-    const stopSession = () => {
+    const clearRestartTimer = () => {
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
+    };
+
+    const scheduleRestart = (delayMs = RESTART_AFTER_END_MS) => {
+      if (!autoListen || cancelled || !enabled || !isFocused) return;
+      clearRestartTimer();
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        if (!cancelled && !actionInFlight) startRecognition();
+      }, delayMs);
+    };
+
+    const restorePlaybackAfterListen = () => {
+      void ensureIosLoudSpeakerRoute();
+      void prepareSpeechAudio(true);
+    };
+
+    const stopSession = ({ resumePreview = true } = {}) => {
       sessionActive = false;
       clearListenWindow();
       setListening(false);
-      if (!cancelled && enabled && isFocused) setVoiceStatus('ready');
-      resumePreviewSafely();
+      if (!cancelled && enabled && isFocused) setVoiceStatus(autoListen ? 'ready' : 'ready');
+      if (resumePreview) resumePreviewSafely();
       try {
         ExpoSpeechRecognitionModule.abort();
       } catch {
@@ -193,6 +263,55 @@ export function useDescribeEnvironmentHotword({
           ExpoSpeechRecognitionModule.stop();
         } catch {
           /* ignore */
+        }
+      }
+      restorePlaybackAfterListen();
+    };
+
+    const waitForSpeechThenRestart = () => {
+      if (!autoListen) return;
+      if (isSpeechActive()) {
+        const unsub = subscribeSpeechActive((active) => {
+          if (!active) {
+            unsub();
+            scheduleRestart(RESTART_AFTER_TTS_MS);
+          }
+        });
+        return;
+      }
+      scheduleRestart(RESTART_AFTER_TTS_MS);
+    };
+
+    const runAction = async (action) => {
+      actionInFlight = true;
+      stopSession({ resumePreview: true });
+
+      let fn = null;
+      if (action === 'describe') fn = onMatchedRef.current;
+      else if (action === 'activateNav') fn = onActivateNavRef.current;
+      else if (action === 'stopNav') fn = onStopNavRef.current;
+      else if (action === 'goObstacle') fn = onGoToObstacleRef.current;
+      else if (action === 'endSession') fn = onEndSessionRef.current;
+
+      try {
+        if (action === 'describe') {
+          resumePreviewSafely();
+          await new Promise((r) => setTimeout(r, 400));
+        } else if (action === 'goObstacle' || action === 'stopNav' || action === 'activateNav') {
+          stopSpeech();
+        }
+        await Promise.resolve(fn && fn());
+      } catch {
+        /* ignore */
+      } finally {
+        actionInFlight = false;
+        if (action === 'describe') {
+          resumePreviewSafely();
+          waitForSpeechThenRestart();
+        } else if (action === 'goObstacle' || action === 'stopNav' || action === 'activateNav') {
+          /* screen may change — hook cleanup handles mic */
+        } else if (autoListen) {
+          waitForSpeechThenRestart();
         }
       }
     };
@@ -204,6 +323,7 @@ export function useDescribeEnvironmentHotword({
         !isFocused ||
         !permissionsReady ||
         sessionActive ||
+        actionInFlight ||
         !ExpoSpeechRecognitionModule?.start
       ) {
         return;
@@ -213,13 +333,17 @@ export function useDescribeEnvironmentHotword({
       setListening(true);
       setVoiceStatus('listening');
       Speech.stop();
-      pausePreviewSafely();
+      if (!autoListen) {
+        pausePreviewSafely();
+      }
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 
       clearListenWindow();
-      listenWindowTimer = setTimeout(() => {
-        if (sessionActive) stopSession();
-      }, LISTEN_WINDOW_MS);
+      if (!autoListen) {
+        listenWindowTimer = setTimeout(() => {
+          if (sessionActive) stopSession();
+        }, LISTEN_WINDOW_MS);
+      }
 
       const startTimer = setTimeout(() => {
         if (cancelled || !sessionActive) return;
@@ -228,14 +352,19 @@ export function useDescribeEnvironmentHotword({
           lang: 'en-US',
           interimResults: true,
           contextualStrings: [
+            'describe',
             'describe environment',
-            'describe the environment',
+            'describe scene',
+            'start description',
+            'stop',
+            'stop description',
             'activate navigation',
             'start navigation',
             'stop navigation',
-            'deactivate navigation',
+            'end session',
+            'end description',
           ],
-          continuous: false,
+          continuous: autoListen,
           requiresOnDeviceRecognition: false,
           iosVoiceProcessingEnabled: Platform.OS === 'ios',
         });
@@ -274,33 +403,33 @@ export function useDescribeEnvironmentHotword({
       configureSpeechRecognitionAudioIOS(ExpoSpeechRecognitionModule);
       permissionsReady = true;
       setVoiceStatus('ready');
+      if (autoListen) {
+        scheduleRestart(900);
+      }
     }
 
     subs.push(
       addSpeechRecognitionListener('result', (ev) => {
-        if (!sessionActive || cancelled) return;
+        if (!sessionActive || cancelled || actionInFlight) return;
         const results = ev?.results || [];
         const text = results.map((r) => r.transcript).join(' ');
 
         let action = null;
-        if (matchesDescribe(text)) action = 'describe';
-        else if (matchesStopNav(text)) action = 'stopNav';
-        else if (matchesActivateNav(text)) action = 'activateNav';
+        if (matchesStopNavigation(text)) action = 'stopNav';
+        else if (matchesGoToObstacle(text)) action = 'goObstacle';
+        else if (matchesEndSession(text)) action = 'endSession';
+        else if (matchesDescribe(text)) action = 'describe';
+        else if (matchesActivateNavigation(text)) action = 'activateNav';
         if (!action) return;
 
         const now = Date.now();
-        if (now - lastFireAt < PHRASE_COOLDOWN_MS) return;
-        lastFireAt = now;
+        const cooldown = action === 'goObstacle' || action === 'stopNav' ? STOP_COOLDOWN_MS : PHRASE_COOLDOWN_MS;
+        const lastAt = action === 'goObstacle' || action === 'stopNav' ? lastStopAt : lastFireAt;
+        if (now - lastAt < cooldown) return;
+        if (action === 'goObstacle' || action === 'stopNav') lastStopAt = now;
+        else lastFireAt = now;
 
-        stopSession();
-        Speech.stop();
-
-        let fn = null;
-        if (action === 'describe') fn = onMatchedRef.current;
-        else if (action === 'activateNav') fn = onActivateNavRef.current;
-        else if (action === 'stopNav') fn = onStopNavRef.current;
-
-        Promise.resolve(fn && fn()).catch(() => {});
+        void runAction(action);
       })
     );
 
@@ -309,15 +438,27 @@ export function useDescribeEnvironmentHotword({
         if (e?.error === 'aborted') return;
         stopSession();
         if (e?.error !== 'no-speech' && e?.error !== 'speech-timeout') {
-          Speech.stop();
-          Speech.speak('Could not hear a command. Tap the voice bar and try again.', volOpts());
+          if (!autoListen) {
+            Speech.stop();
+            Speech.speak('Could not hear a command. Tap the voice bar and try again.', volOpts());
+          }
         }
+        if (autoListen) scheduleRestart(1200);
       })
     );
 
     subs.push(
       addSpeechRecognitionListener('end', () => {
-        if (sessionActive) stopSession();
+        sessionActive = false;
+        setListening(false);
+        restorePlaybackAfterListen();
+        resumePreviewSafely();
+        if (!cancelled && enabled && isFocused && !actionInFlight && autoListen) {
+          setVoiceStatus('ready');
+          scheduleRestart(RESTART_AFTER_END_MS);
+        } else if (!cancelled && enabled && isFocused) {
+          setVoiceStatus('ready');
+        }
       })
     );
 
@@ -336,6 +477,7 @@ export function useDescribeEnvironmentHotword({
     return () => {
       cancelled = true;
       requestListenRef.current = () => {};
+      clearRestartTimer();
       stopSession();
       setVoiceStatus('off');
       timers.forEach(clearTimeout);
@@ -349,7 +491,7 @@ export function useDescribeEnvironmentHotword({
       Speech.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, isFocused]);
+  }, [enabled, isFocused, autoListen]);
 
   const requestVoiceListen = useCallback(() => {
     requestListenRef.current();

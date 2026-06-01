@@ -8,7 +8,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import {
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -29,15 +28,13 @@ import { loadInferenceApiUrl } from '../utils/inferenceApiUrl';
 import { saveAlertVolume, syncStoredAlertVolumeToSystem } from '../utils/alertVolumeStorage';
 import { applyAlertVolumeToSystemOutput } from '../utils/systemOutputVolume';
 import { buildTtsOptions } from '../utils/buildTtsOptions';
-import { speakAlert, stopSpeech, prepareSpeechAudio } from '../utils/speakAlert';
-import { captureAndDescribeScene } from '../utils/describeSceneFromCamera';
+import { speakAlert, prepareSpeechAudio, isSpeechActive } from '../utils/speakAlert';
 import { smoothDetectionDistances } from '../utils/smoothDetectionDistances';
 import { pickCloseThreat } from '../utils/evaluateCloseThreat';
 import { isSimulatorDevice } from '../utils/isSimulator';
 import { DEFAULTS, loadAppPreferences } from '../utils/appSettings';
 import { getPredictOptionsForRequest } from '../utils/aiLabSettings';
 import { useVolumeHardwareShortcut } from '../hooks/useVolumeHardwareShortcut';
-import { useDescribeEnvironmentHotword } from '../hooks/useDescribeEnvironmentHotword';
 
 const CameraComponent = ExpoCamera.Camera || ExpoCamera.default;
 const CAMERA_TYPE = ExpoCamera.Camera?.Constants?.Type || ExpoCamera.Constants?.Type || { back: 'back', front: 'front' };
@@ -114,7 +111,7 @@ function pickLockedPrimary(sortedDetections, lockRef, hysteresisM = 0.55) {
   return lockedDet;
 }
 
-const SPEAK_MIN_GAP_MS = 2800;
+const SPEAK_MIN_GAP_MS = 4500;
 /** Ignore weak or distance-less YOLO hits (avoids false "exit/car" speech). */
 const NAV_MIN_CONF = 0.35;
 
@@ -132,7 +129,7 @@ function formatMeters(m) {
   return `${Number(m).toFixed(1)} m`;
 }
 
-export default function MainNavigationScreen({ navigation }) {
+export default function MainNavigationScreen({ navigation, route }) {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -166,16 +163,11 @@ export default function MainNavigationScreen({ navigation }) {
   const [voiceContextHint, setVoiceContextHint] = useState(null);
   const [inferenceError, setInferenceError] = useState(null);
   const [volumeOpen, setVolumeOpen] = useState(false);
-  const [alertVolume, setAlertVolume] = useState(0.8);
+  const [alertVolume, setAlertVolume] = useState(1);
   const [dangerPayload, setDangerPayload] = useState(null);
   const [volumeHardwareAction, setVolumeHardwareAction] = useState(
     DEFAULTS.volumeHardwareAction
   );
-  const [handsFreeDescribe, setHandsFreeDescribe] = useState(DEFAULTS.handsFreeDescribe);
-  const [voiceListening, setVoiceListening] = useState(false);
-  /** off | paused | starting | unavailable | denied | ready | listening */
-  const [voiceStatus, setVoiceStatus] = useState('off');
-  const [voiceDetail, setVoiceDetail] = useState(null);
   const [camMountError, setCamMountError] = useState(null);
   const isSimulator = isSimulatorDevice();
 
@@ -214,6 +206,11 @@ export default function MainNavigationScreen({ navigation }) {
     []
   );
 
+  const ttsOptsUrgent = useCallback(
+    () => buildTtsOptions(alertVolumeRef.current, prefsRef.current.speechRate, { urgent: true }),
+    []
+  );
+
   const refreshPredictOpts = useCallback(() => {
     void loadAppPreferences().then(async (p) => {
       prefsRef.current = p;
@@ -221,7 +218,6 @@ export default function MainNavigationScreen({ navigation }) {
       predictOptsRef.current = po;
       setAiFrameMs(p.aiFrameMs);
       setVolumeHardwareAction(p.volumeHardwareAction);
-      setHandsFreeDescribe(p.handsFreeDescribe);
     });
   }, []);
 
@@ -238,14 +234,13 @@ export default function MainNavigationScreen({ navigation }) {
     useCallback(() => {
       refreshPredictOpts();
       void syncStoredAlertVolumeToSystem().then((v) => setAlertVolume(v));
-    }, [refreshPredictOpts])
+      if (route.params?.enableObstacle) {
+        setAiTestEnabled(true);
+        speakAlert('Obstacle detection on.', ttsOpts());
+        navigation.setParams({ enableObstacle: undefined });
+      }
+    }, [refreshPredictOpts, route.params?.enableObstacle, navigation, ttsOpts])
   );
-
-  useEffect(() => {
-    if (!handsFreeDescribe) {
-      setVoiceStatus('off');
-    }
-  }, [handsFreeDescribe]);
 
   useEffect(() => {
     const tick = () => setClock(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
@@ -275,117 +270,20 @@ export default function MainNavigationScreen({ navigation }) {
     }
   }, [aiTestEnabled]);
 
-  /** Voice command "activate navigation" → enable AI test (which now does navigation too). */
-  const onActivateNavigation = useCallback(() => {
-    if (aiTestRef.current) return;
-    setAiTestEnabled(true);
-    speakAlert('Navigation activated.', ttsOpts());
-  }, [ttsOpts]);
-
-  /** Voice command "stop navigation" → disable AI test. */
-  const onStopNavigation = useCallback(() => {
-    if (!aiTestRef.current) return;
-    setAiTestEnabled(false);
-    speakAlert('Navigation stopped.', ttsOpts());
-  }, [ttsOpts]);
-
-  const describeInFlightRef = useRef(false);
-
-  /** Groq describe on the live nav camera — stays on detection screen. */
-  const runDescribeInPlace = useCallback(async () => {
-    if (describeInFlightRef.current) return;
-    describeInFlightRef.current = true;
-    stopSpeech();
-    try {
-      if (Platform.OS !== 'web') {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-      }
-      const res = await captureAndDescribeScene(cameraRef);
-      if (!res.ok) {
-        if (res.error) speakAlert(res.error, ttsOpts());
-        return;
-      }
-      if (res.text && res.shouldSpeak) {
-        speakAlert(res.text, ttsOpts());
-      }
-    } finally {
-      describeInFlightRef.current = false;
-    }
-  }, [ttsOpts]);
+  const openSceneChat = useCallback(
+    (autoDescribe = false) => {
+      navigation.navigate('SceneQuery', autoDescribe ? { autoDescribe: true } : undefined);
+    },
+    [navigation]
+  );
 
   useVolumeHardwareShortcut(navigation, {
     enabled: !volumeOpen,
-    action: volumeHardwareAction,
+    action: volumeHardwareAction === 'none' ? 'none' : 'scene_query',
     onDescribeEnvironment: () => {
-      if (volumeHardwareAction === 'scene_query') {
-        navigation.navigate('SceneQuery');
-        return;
-      }
-      void runDescribeInPlace();
+      openSceneChat(volumeHardwareAction === 'describe');
     },
   });
-
-  const { requestVoiceListen } = useDescribeEnvironmentHotword({
-    enabled: handsFreeDescribe && !volumeOpen,
-    cameraRef,
-    alertVolumeRef,
-    getTtsOpts: ttsOpts,
-    onPhraseMatched: runDescribeInPlace,
-    onActivateNavigation,
-    onStopNavigation,
-    onListeningChange: setVoiceListening,
-    onVoiceStatusChange: setVoiceStatus,
-    onVoiceDetailChange: setVoiceDetail,
-  });
-
-  const voiceBannerText = (() => {
-    if (!handsFreeDescribe) return null;
-    switch (voiceStatus) {
-      case 'listening':
-        return 'Listening — say: describe environment, activate navigation, or stop navigation';
-      case 'ready':
-        return 'Hands-free on — tap here, then say your command';
-      case 'starting':
-        return 'Hands-free on — tap here when ready to speak';
-      case 'denied':
-        return 'Voice blocked — tap here, then allow Microphone + Speech Recognition';
-      case 'unavailable':
-        return voiceDetail || 'Voice unavailable — reinstall from Xcode (▶ Run on iPhone)';
-      case 'paused':
-        return 'Voice paused — return to this screen';
-      default:
-        return 'Hands-free on — tap the bar to speak a command';
-    }
-  })();
-
-  const voiceBannerTappable =
-    handsFreeDescribe &&
-    (voiceStatus === 'ready' ||
-      voiceStatus === 'starting' ||
-      voiceStatus === 'denied');
-
-  const onVoiceBannerPress = useCallback(() => {
-    if (voiceStatus === 'denied') {
-      Linking.openSettings().catch(() => {});
-      return;
-    }
-    requestVoiceListen();
-  }, [voiceStatus, requestVoiceListen]);
-
-  /** Spoken cue when toggling hands-free from Settings — avoid first mount */
-  const announceHandsFreeInitialized = useRef(false);
-  useEffect(() => {
-    if (!announceHandsFreeInitialized.current) {
-      announceHandsFreeInitialized.current = true;
-      return;
-    }
-    speakAlert(
-      handsFreeDescribe
-        ? 'Hands-free commands enabled. Tap the voice bar, then say your command.'
-        : 'Hands-free commands disabled.',
-      ttsOpts()
-    );
-  }, [handsFreeDescribe]);
 
   /** TTS only when YOLO sees a validated obstacle (silent when path is clear). */
   const speakYoloDetection = useCallback((primaryOnly) => {
@@ -415,8 +313,8 @@ export default function MainNavigationScreen({ navigation }) {
     lastTtsKeyRef.current = obKey;
     lastSpeakAtRef.current = now;
     hadObstacleRef.current = true;
-    speakAlert(msg, { ...ttsOpts(), latest: true });
-  }, [ttsOpts]);
+    speakAlert(msg, { ...ttsOptsUrgent(), interrupt: true });
+  }, [ttsOptsUrgent]);
 
   /** Groq speaks first; YOLO emergency/fallback only when Groq has no guidance. */
   const speakNavigationVoice = useCallback((groq, primaryOnly) => {
@@ -425,6 +323,7 @@ export default function MainNavigationScreen({ navigation }) {
     const risk = typeof groq?.risk === 'string' ? groq.risk.toLowerCase() : 'ok';
     const hasValidYolo = primaryOnly.some(isValidNavDetection);
     const now = Date.now();
+    const urgent = risk === 'danger' || risk === 'caution';
 
     if (guidance) {
       if (
@@ -445,13 +344,16 @@ export default function MainNavigationScreen({ navigation }) {
         return;
       }
 
+      if (isSpeechActive() && !urgent) {
+        return;
+      }
+
       lastTtsKeyRef.current = groqKey;
       lastSpeakAtRef.current = now;
       hadObstacleRef.current = true;
       speakAlert(guidance, {
-        ...ttsOpts(),
-        latest: true,
-        interrupt: risk === 'danger' || risk === 'caution',
+        ...ttsOptsUrgent(),
+        interrupt: urgent,
       });
       return;
     }
@@ -473,12 +375,12 @@ export default function MainNavigationScreen({ navigation }) {
       const msg = `Stop. ${label.charAt(0).toUpperCase() + label.slice(1)} ${dist} meters ${side}.`;
       lastTtsKeyRef.current = `stop|${closest.name}|${dist}`;
       lastSpeakAtRef.current = now;
-      speakAlert(msg, { ...ttsOpts(), pitch: 1.05, interrupt: true });
+      speakAlert(msg, { ...ttsOptsUrgent(), interrupt: true });
       return;
     }
 
     speakYoloDetection(primaryOnly);
-  }, [speakYoloDetection, ttsOpts]);
+  }, [speakYoloDetection, ttsOptsUrgent]);
 
   const onCameraTap = useCallback(() => {
     if (Platform.OS !== 'web') {
@@ -690,39 +592,23 @@ export default function MainNavigationScreen({ navigation }) {
               }
               const next = !aiTestEnabled;
               setAiTestEnabled(next);
-              speakAlert(next ? 'Navigation activated.' : 'Navigation stopped.', ttsOpts());
+              speakAlert(next ? 'Obstacle detection on.' : 'Obstacle detection off.', ttsOpts());
             }}
             accessibilityRole="button"
             accessibilityState={{ selected: aiTestEnabled }}
             accessibilityLabel={
               aiTestEnabled
-                ? 'AI navigation active — tap to stop'
-                : 'AI navigation off — tap to start, or say activate navigation'
+                ? 'Obstacle detection active — tap to stop'
+                : 'Obstacle detection off — tap to start'
             }
             accessibilityHint={
               aiTestEnabled
-                ? 'Stops obstacle detection and Groq navigation guidance.'
-                : 'Starts YOLO obstacle detection plus Groq detailed navigation instructions.'
+                ? 'Stops YOLO obstacle detection and Groq guidance.'
+                : 'Starts YOLO obstacle detection on the live camera.'
             }
           >
-            <MaterialCommunityIcons name="brain" size={15} color={aiTestEnabled ? colors.btnText : colors.teal} />
-            <Text style={[styles.aiPillText, aiTestEnabled && styles.aiPillTextOn]}>AI test</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.aiPill, pressed && styles.aiPillPressed]}
-            onPress={() => {
-              if (Platform.OS !== 'web') {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-              }
-              runDescribeInPlace();
-            }}
-            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel="Describe environment scene summary"
-            accessibilityHint="Opens Scene Query with a fresh scene description, same as the Sound tab."
-          >
-            <MaterialCommunityIcons name="microphone-outline" size={15} color={colors.teal} />
-            <Text style={styles.aiPillText}>Describe</Text>
+            <MaterialCommunityIcons name="radar" size={15} color={aiTestEnabled ? colors.btnText : colors.teal} />
+            <Text style={[styles.aiPillText, aiTestEnabled && styles.aiPillTextOn]}>Obstacle D</Text>
           </Pressable>
         </View>
       </View>
@@ -748,47 +634,6 @@ export default function MainNavigationScreen({ navigation }) {
           ) : (
             <View style={[StyleSheet.absoluteFill, styles.cameraPaused]} />
           )}
-          {voiceBannerText ? (
-            <Pressable
-              style={[
-                styles.voiceListenBanner,
-                (voiceStatus === 'denied' || voiceStatus === 'unavailable') &&
-                  styles.voiceListenBannerWarn,
-                voiceStatus === 'listening' && styles.voiceListenBannerActive,
-              ]}
-              onPress={voiceBannerTappable ? onVoiceBannerPress : undefined}
-              disabled={!voiceBannerTappable}
-              accessibilityRole="button"
-              accessibilityLabel={
-                voiceStatus === 'denied'
-                  ? 'Open iPhone Settings to allow microphone and speech recognition'
-                  : voiceBannerTappable
-                    ? 'Start listening for voice command'
-                    : voiceBannerText
-              }
-            >
-              <MaterialCommunityIcons
-                name={
-                  voiceStatus === 'denied' || voiceStatus === 'unavailable'
-                    ? 'microphone-off'
-                    : voiceStatus === 'listening'
-                      ? 'microphone'
-                      : 'microphone-outline'
-                }
-                size={16}
-                color={voiceStatus === 'denied' || voiceStatus === 'unavailable' ? '#FCA5A5' : '#A7F3D0'}
-              />
-              <Text
-                style={[
-                  styles.voiceListenBannerText,
-                  (voiceStatus === 'denied' || voiceStatus === 'unavailable') &&
-                    styles.voiceListenBannerTextWarn,
-                ]}
-              >
-                {voiceBannerText}
-              </Text>
-            </Pressable>
-          ) : null}
           {isFocused && isSimulator ? (
             <View style={styles.simBanner} pointerEvents="none">
               <Text style={styles.simBannerText}>
@@ -841,7 +686,7 @@ export default function MainNavigationScreen({ navigation }) {
       {/* ALERT CARD — closest obstacle, scene/context (Gemini / scene model), pipeline stats */}
       <View style={styles.alertCard}>
         <MaterialCommunityIcons
-          name={aiTestEnabled ? 'brain' : 'alert-circle-outline'}
+          name={aiTestEnabled ? 'radar' : 'alert-circle-outline'}
           size={22}
           color={aiTestEnabled ? colors.teal : colors.grey}
           style={styles.alertCardIcon}
@@ -893,10 +738,10 @@ export default function MainNavigationScreen({ navigation }) {
             </>
           ) : (
             <>
-              <Text style={styles.alertTitle}>AI System Idle</Text>
+              <Text style={styles.alertTitle}>Obstacle detection off</Text>
               <Text style={styles.alertSub}>
-                Tap AI test to start obstacle detection. Tap Sound when you want a spoken scene
-                description — you stay on this camera view.
+                Tap Obstacle D to start detection. Scene chat: say describe, stop to return here,
+                or activate navigation for obstacles.
               </Text>
             </>
           )}
@@ -908,35 +753,23 @@ export default function MainNavigationScreen({ navigation }) {
         <Pressable
           style={({ pressed }) => [styles.navItem, pressed && styles.navPressed]}
           hitSlop={{ top: 14, bottom: 14, left: 16, right: 16 }}
-          onPress={() => {
-            if (Platform.OS !== 'web') {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-            }
-            runDescribeInPlace();
-          }}
-          onLongPress={() => {
-            if (Platform.OS !== 'web') {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-            }
-            setVolumeOpen(true);
-          }}
-          delayLongPress={3000}
+          onPress={() => setVolumeOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel="Scene description — speak summary from live camera"
-          accessibilityHint="Reads a Groq scene description without leaving navigation. Press and hold for alert volume."
+          accessibilityLabel="Alert volume"
+          accessibilityHint="Adjust spoken alert loudness for obstacle warnings."
         >
           <MaterialCommunityIcons name="volume-high" size={26} color={colors.tealBright} />
-          <Text style={styles.navLabel}>Sound</Text>
+          <Text style={styles.navLabel}>Volume</Text>
         </Pressable>
 
         <Pressable
           style={styles.centerFab}
-          onPress={() => navigation.navigate('SceneQuery')}
+          onPress={() => openSceneChat(false)}
           accessibilityRole="button"
-          accessibilityLabel="Scene descriptions"
-          accessibilityHint="Opens the scene description chat. Use Describe scene for a fresh summary."
+          accessibilityLabel="Scene chat"
+          accessibilityHint="Scene description chat — describe and voice commands live here only."
         >
-          <MaterialCommunityIcons name="chart-box-outline" size={30} color={colors.btnText} />
+          <MaterialCommunityIcons name="message-text-outline" size={28} color={colors.btnText} />
         </Pressable>
 
         <Pressable
@@ -944,7 +777,7 @@ export default function MainNavigationScreen({ navigation }) {
           onPress={() => navigation.navigate('Settings')}
           accessibilityRole="button"
           accessibilityLabel="Settings"
-          accessibilityHint="Shortcuts for volume keys describe and hands-free phrase"
+          accessibilityHint="App preferences and inference server URL."
         >
           <MaterialCommunityIcons name="cog-outline" size={26} color={colors.tealBright} />
           <Text style={styles.navLabel}>Settings</Text>

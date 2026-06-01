@@ -64,8 +64,8 @@ export function pickCloseThreat(detections, options = {}) {
             .toUpperCase()
             .slice(0, 18);
       const alertMessage = isPerson
-        ? 'Person ahead. Stop and be careful.'
-        : 'Obstacle ahead. Stop and be careful.';
+        ? 'Stop! Person ahead!'
+        : 'Stop! Obstacle ahead!';
       best = {
         id: `${className}-${i}`,
         displayLabel,

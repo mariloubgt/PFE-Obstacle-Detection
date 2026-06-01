@@ -47,20 +47,7 @@ export function useVolumeHardwareShortcut(navigation, options = {}) {
   const nativeModRef = useRef(null);
 
   const restoreBaselineVolume = useCallback(() => {
-    if (Platform.OS === 'ios') return;
-    const mod = nativeModRef.current;
-    if (!mod || typeof mod.setVolume !== 'function') return;
-    const v = alertOutputState.baseline01;
-    const clamped = Math.min(1, Math.max(0, v));
-    // Programmatic setVolume often emits 1–2 extra KVO callbacks on iOS.
-    ignoreNextVolumeEventsRef.current += 2;
-    void Promise.resolve(
-      mod.setVolume(clamped, {
-        playSound: false,
-        type: 'music',
-        showUI: false,
-      })
-    ).catch(() => {});
+    void applyAlertVolumeToSystemOutput(alertOutputState.baseline01);
   }, []);
 
   useEffect(() => {
@@ -125,6 +112,9 @@ export function useVolumeHardwareShortcut(navigation, options = {}) {
         }
 
         restoreBaselineVolume();
+        if (Platform.OS === 'ios') {
+          ignoreNextVolumeEventsRef.current += 2;
+        }
       };
 
       subscription = mod.addVolumeListener(onVolume);

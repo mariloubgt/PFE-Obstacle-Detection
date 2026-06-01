@@ -1,28 +1,38 @@
 import { NativeModules, Platform } from 'react-native';
 
-/**
- * Single source of truth for alert loudness preference (0–1).
- * On iOS we do NOT call VolumeManager.setVolume — it hijacks MPVolumeView and breaks TTS routing.
- */
+/** Single source of truth for alert loudness preference (0–1). */
 export const alertOutputState = {
-  baseline01: 0.8,
+  baseline01: 1,
 };
 
 function clamp01(v) {
-  const n = typeof v === 'number' && !Number.isNaN(v) ? v : 0.8;
+  const n = typeof v === 'number' && !Number.isNaN(v) ? v : 1;
   return Math.min(1, Math.max(0, n));
 }
 
+/** Route TTS to the loud speaker (expo-av alone leaves iOS on the quiet earpiece). */
+async function ensureIosLoudSpeakerRoute() {
+  if (Platform.OS !== 'ios') return;
+  const mod = NativeModules.SpeechAudioModule;
+  if (!mod?.prepareForSpeech) return;
+  try {
+    await mod.prepareForSpeech();
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
- * Store alert volume preference. User adjusts real loudness with iPhone side buttons.
+ * Apply alert volume to device output (side-button stream on iOS/Android).
  * @param {number} volume01
+ * @param {{ forceMax?: boolean }} [opts]
  */
-export async function applyAlertVolumeToSystemOutput(volume01) {
-  alertOutputState.baseline01 = clamp01(volume01);
+export async function applyAlertVolumeToSystemOutput(volume01, opts = {}) {
+  const forceMax = opts?.forceMax === true;
+  alertOutputState.baseline01 = forceMax ? 1 : clamp01(volume01);
 
   if (Platform.OS === 'web') return;
-  if (Platform.OS === 'ios') return;
-
+  await ensureIosLoudSpeakerRoute();
   if (!NativeModules.VolumeManager) return;
 
   try {
@@ -41,3 +51,9 @@ export async function applyAlertVolumeToSystemOutput(volume01) {
 export function stageAlertVolumeLive(volume01) {
   return applyAlertVolumeToSystemOutput(volume01);
 }
+
+export async function applyMaxAlertVolumeForUrgent() {
+  return applyAlertVolumeToSystemOutput(1, { forceMax: true });
+}
+
+export { ensureIosLoudSpeakerRoute };
