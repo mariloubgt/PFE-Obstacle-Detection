@@ -130,8 +130,8 @@ function createWelcomeStyles(colors) {
     },
     logoFrame: {
       alignSelf: 'center',
-      width: 112,
-      height: 112,
+      width: LAYOUT.logoBoxMaxWidth,
+      height: LAYOUT.logoBoxHeight,
       marginTop: 8,
       marginBottom: 20,
       alignItems: 'center',

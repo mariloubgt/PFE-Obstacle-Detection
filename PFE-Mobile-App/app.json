@@ -39,7 +39,7 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.anonymous.PFEMobileApp"
+      "package": "com.maya.visionaid"
     },
     "web": {
       "favicon": "./assets/favicon.png"

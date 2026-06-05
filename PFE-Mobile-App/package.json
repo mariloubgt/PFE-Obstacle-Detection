@@ -12,6 +12,8 @@
     "ios:dev": "expo run:ios --device",
     "ios:release": "expo run:ios --configuration Release --device --no-bundler",
     "ios:pods": "cd ios && pod install",
+    "deploy:ios": "bash ../scripts/deploy-ios.sh",
+    "deploy:android": "bash ../scripts/deploy-android.sh",
     "web": "expo start --web",
     "sync-icons": "bash scripts/sync-native-icons.sh",
     "ai-lab": "bash ../scripts/ai-lab-start.sh",
