@@ -188,7 +188,7 @@ export default function SettingsScreen({ navigation }) {
   const [vib, setVib] = useState(true);
   const [lowLight, setLowLight] = useState(true);
   const [gem, setGem] = useState(false);
-  const [hfovDeg, setHfovDeg] = useState(56);
+  const [hfovDeg, setHfovDeg] = useState(57);
   const [hfovOpen, setHfovOpen] = useState(false);
   const [depthScale, setDepthScale] = useState(1);
   const [depthOpen, setDepthOpen] = useState(false);

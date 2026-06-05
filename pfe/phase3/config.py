@@ -50,7 +50,8 @@ FOCAL_CONSTANT = 1150  # legacy constant (depth now uses FOV below)
 
 # Horizontal FOV (degrees) — main rear camera, full frame. Tune per device or set
 # CAMERA_HORIZONTAL_FOV_DEG in the environment (inference_server already reads it).
-CAMERA_HORIZONTAL_FOV_DEG = float(os.getenv("CAMERA_HORIZONTAL_FOV_DEG", "56.0"))
+# Pinhole depth: fx = (img_w/2) / tan(hfov/2). iPhone main cam ≈ 57° horizontal.
+CAMERA_HORIZONTAL_FOV_DEG = float(os.getenv("CAMERA_HORIZONTAL_FOV_DEG", "57.0"))
 
 # Portrait width/height when only img_h is known (legacy tests). ~iPhone 14 portrait.
 DEFAULT_IMAGE_WH_RATIO = float(os.getenv("DEFAULT_IMAGE_WH_RATIO", "0.462"))
@@ -84,7 +85,7 @@ _COCO_EXTRA_HEIGHTS_CM = {
     "tennis_racket": 70, "bottle": 25, "wine_glass": 20, "cup": 10, "fork": 20,
     "knife": 20, "spoon": 18, "bowl": 8, "banana": 20, "apple": 8, "sandwich": 8,
     "orange": 8, "broccoli": 15, "carrot": 20, "hot_dog": 12, "pizza": 4, "donut": 4,
-    "cake": 15, "chair": 95, "couch": 85, "potted_plant": 80, "bed": 100,
+    "cake": 15, "chair": 85, "couch": 85, "potted_plant": 80, "bed": 100,
     "dining_table": 75, "toilet": 80, "tv": 55, "laptop": 25, "mouse": 5,
     "remote": 5, "keyboard": 3, "cell_phone": 14, "microwave": 30, "oven": 60,
     "toaster": 20, "sink": 25, "refrigerator": 170, "book": 25, "clock": 25,
@@ -96,7 +97,7 @@ OBJECT_REAL_HEIGHTS = {**_COCO_EXTRA_HEIGHTS_CM, **_OBJECT_REAL_HEIGHTS_BASE}
 
 OBJECT_REAL_WIDTHS = {
     "person": 50, "car": 180, "bus": 250, "truck": 250, "motorcycle": 80,
-    "bicycle": 60, "dog": 30, "bench": 120, "chair": 55, "tree": 80,
+    "bicycle": 60, "dog": 30, "bench": 120, "chair": 50, "tree": 80,
     "traffic_light": 40, "stop_sign": 75, "fire_hydrant": 40, "potted_plant": 40,
 }
 

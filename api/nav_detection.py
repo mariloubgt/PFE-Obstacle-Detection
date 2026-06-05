@@ -23,8 +23,11 @@ _INDOOR_CLASSES = frozenset(
 
 _PERSON_MIN_CONF = 0.58
 _PERSON_MIN_AREA = 0.022
+_CHAIR_MIN_CONF = 0.50
+_CHAIR_MIN_CONF_OUTDOOR = 0.58
+_CHAIR_MIN_AREA = 0.007
 _DEFAULT_MIN_CONF = 0.38
-_INDOOR_MIN_CONF = 0.34
+_INDOOR_MIN_CONF = 0.36
 _MIN_AREA = 0.0025
 _TINY_AREA = 0.005
 _TINY_MIN_CONF = 0.48
@@ -73,6 +76,17 @@ def filter_nav_detections(
             if aspect < 0.85 or aspect > 4.5:
                 continue
 
+        if key == "chair":
+            min_chair = _CHAIR_MIN_CONF_OUTDOOR if source == "outdoor" else _CHAIR_MIN_CONF
+            if raw < min_chair or area < _CHAIR_MIN_AREA:
+                continue
+            aspect = bh / max(bw, 1e-6)
+            if aspect < 0.45 or aspect > 3.2:
+                continue
+            cy = (y1 + y2) / 2.0
+            if cy < 0.22:
+                continue
+
         min_conf = _INDOOR_MIN_CONF if key in _INDOOR_CLASSES else _DEFAULT_MIN_CONF
         if raw < min_conf:
             continue
@@ -92,7 +106,23 @@ def filter_nav_detections(
             -_raw_conf(d),
         )
     )
-    return kept
+    return _dedupe_chairs(kept)
+
+
+def _dedupe_chairs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep at most one chair — strongest / closest (reduces phantom duplicates)."""
+    chair_idx = [i for i, d in enumerate(items) if _norm(str(d.get("name", ""))) == "chair"]
+    if len(chair_idx) <= 1:
+        return items
+    best_i = max(
+        chair_idx,
+        key=lambda i: (_raw_conf(items[i]), -float(items[i].get("distance_m") or 99)),
+    )
+    return [
+        d
+        for i, d in enumerate(items)
+        if _norm(str(d.get("name", ""))) != "chair" or i == best_i
+    ]
 
 
 def strip_stale_outdoor_person(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -55,7 +55,7 @@ YOLO_IOU = float(os.environ.get("YOLO_IOU", str(config.YOLO_IOU)))
 YOLO_MAX_DET = int(os.environ.get("YOLO_MAX_DET", "40"))
 YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", str(config.IMG_SIZE)))
 PORT = int(os.environ.get("PORT", "8787"))
-HFOV_DEG = float(os.environ.get("CAMERA_HORIZONTAL_FOV_DEG", "56.0"))
+HFOV_DEG = float(os.environ.get("CAMERA_HORIZONTAL_FOV_DEG", "57.0"))
 DEPTH_SCALE_ENV = float(os.environ.get("DEPTH_SCALE", "1.0"))
 
 

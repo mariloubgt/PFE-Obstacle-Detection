@@ -27,7 +27,7 @@ export const DEFAULTS = {
   primaryLang: 'en',
   internetGemini: false,
   /** Rear camera horizontal FOV (degrees); tune if distances are systematically wrong */
-  cameraHfovDeg: 56,
+  cameraHfovDeg: 57,
   /** multiply server distance (0.5–2). If app reads too far, try 0.85; too close, 1.15 */
   depthScale: 1.0,
   /**

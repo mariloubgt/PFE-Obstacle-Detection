@@ -148,6 +148,7 @@ YOUR OUTPUT MUST ALWAYS END WITH ONE OF THESE ACTIONS:
 - "Turn around."
 
 RULES:
+- Do NOT repeat the same obstacle class every frame if nothing changed — vary wording or say path is clear.
 - The action is MANDATORY. Never give a sentence without an action at the end.
 - If obstacle is directly ahead → pick left OR right (whichever side is clear from the image).
 - If obstacle < 1.5 m → action is "Stop." or "Step left." or "Step right." (urgent).

@@ -21,7 +21,11 @@ def _norm_class_key(name: str) -> str:
 
 
 def focal_lengths_from_hfov(img_w: int, img_h: int, hfov_deg: float) -> tuple[float, float]:
-    """Pixel focal lengths fx, fy from horizontal FOV and image aspect (square pixels)."""
+    """
+    Pinhole focal lengths from horizontal FOV (rule of 57° for iPhone main camera):
+        fx = (img_w / 2) / tan(hfov_deg / 2)
+    fy from vertical FOV derived from aspect ratio.
+    """
     if img_w <= 0 or img_h <= 0:
         return 1.0, 1.0
     hfov = math.radians(float(hfov_deg))
